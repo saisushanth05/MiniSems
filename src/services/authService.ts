@@ -1,0 +1,202 @@
+// Mini Sems — Auth Service
+// OTP-based authentication for all 4 roles
+
+import {supabase, db} from './supabase';
+import DeviceInfo from 'react-native-device-info';
+import type {OTPVerifyRequest, OTPVerifyResponse, AuthUser, LoginRequest} from '@apptypes/user.types';
+import type {ApiResponse} from '@apptypes/database.types';
+
+// ── Send OTP ──
+export const sendOTP = async (
+  request: LoginRequest,
+): Promise<ApiResponse<{message: string; expiresIn: number}>> => {
+  try {
+    const {data, error} = await supabase.functions.invoke('send-otp', {
+      body: {
+        mobile: request.mobile,
+        role: request.role,
+        rollNumber: request.rollNumber,
+      },
+    });
+
+    if (error) throw error;
+    return {data, error: null};
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'Failed to send OTP';
+    return {data: null, error: {message}};
+  }
+};
+
+// ── Verify OTP & Login ──
+export const verifyOTPAndLogin = async (
+  request: OTPVerifyRequest,
+): Promise<ApiResponse<OTPVerifyResponse>> => {
+  try {
+    const {data, error} = await supabase.functions.invoke('verify-otp-login', {
+      body: request,
+    });
+
+    if (error) throw error;
+
+    if (data?.session) {
+      await supabase.auth.setSession({
+        access_token: data.session.access_token,
+        refresh_token: data.session.refresh_token,
+      });
+    }
+
+    return {data, error: null};
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'OTP verification failed';
+    return {data: null, error: {message}};
+  }
+};
+
+// ── Get Device ID ──
+export const getDeviceId = async (): Promise<string> => {
+  try {
+    return await DeviceInfo.getUniqueId();
+  } catch {
+    return `device_${Date.now()}`;
+  }
+};
+
+// ── Get Device Info ──
+export const getDeviceInfo = async () => {
+  const [deviceId, model, systemVersion, appVersion] = await Promise.all([
+    DeviceInfo.getUniqueId(),
+    DeviceInfo.getModel(),
+    DeviceInfo.getSystemVersion(),
+    DeviceInfo.getVersion(),
+  ]);
+  return {deviceId, model, systemVersion, appVersion};
+};
+
+// ── Register Device ──
+export const registerDevice = async (params: {
+  collegeId: string;
+  studentId: string;
+  deviceId: string;
+  deviceModel?: string;
+  osVersion?: string;
+  appVersion?: string;
+}): Promise<ApiResponse<boolean>> => {
+  try {
+    const {error} = await db.deviceRegistrations().upsert(
+      {
+        college_id: params.collegeId,
+        student_id: params.studentId,
+        device_id: params.deviceId,
+        device_model: params.deviceModel,
+        os_version: params.osVersion,
+        app_version: params.appVersion,
+        is_active: true,
+        registered_at: new Date().toISOString(),
+        last_used_at: new Date().toISOString(),
+      },
+      {onConflict: 'student_id,device_id'},
+    );
+
+    if (error) throw error;
+    return {data: true, error: null};
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'Device registration failed';
+    return {data: null, error: {message}};
+  }
+};
+
+// ── Verify Device ──
+export const verifyDevice = async (params: {
+  studentId: string;
+  deviceId: string;
+  collegeId: string;
+}): Promise<{isValid: boolean; isNewDevice: boolean}> => {
+  try {
+    const {data} = await db.deviceRegistrations()
+      .select('*')
+      .eq('student_id', params.studentId)
+      .eq('college_id', params.collegeId)
+      .eq('is_active', true)
+      .single();
+
+    if (!data) {
+      return {isValid: true, isNewDevice: true};
+    }
+
+    if (data.device_id !== params.deviceId) {
+      return {isValid: false, isNewDevice: false};
+    }
+
+    // Update last_used_at
+    await db.deviceRegistrations()
+      .update({last_used_at: new Date().toISOString()})
+      .eq('id', data.id);
+
+    return {isValid: true, isNewDevice: false};
+  } catch {
+    return {isValid: true, isNewDevice: true};
+  }
+};
+
+// ── Invalidate Other Sessions ──
+export const invalidateOtherSessions = async (userId: string): Promise<void> => {
+  try {
+    await supabase.functions.invoke('invalidate-sessions', {body: {userId}});
+  } catch {
+    // Non-critical — continue
+  }
+};
+
+// ── Logout ──
+export const logout = async (): Promise<void> => {
+  await supabase.auth.signOut();
+};
+
+// ── Refresh Token ──
+export const refreshSession = async (): Promise<boolean> => {
+  try {
+    const {data, error} = await supabase.auth.refreshSession();
+    return !error && !!data.session;
+  } catch {
+    return false;
+  }
+};
+
+// ── Get Current User Profile ──
+export const getCurrentUserProfile = async (): Promise<ApiResponse<AuthUser>> => {
+  try {
+    const {data: session} = await supabase.auth.getSession();
+    if (!session.session) {
+      return {data: null, error: {message: 'No active session'}};
+    }
+
+    const {data: profile, error} = await supabase.functions.invoke('get-user-profile');
+    if (error) throw error;
+
+    return {data: profile as AuthUser, error: null};
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'Failed to get user profile';
+    return {data: null, error: {message}};
+  }
+};
+
+// ── Audit log helper ──
+export const logAuthAudit = async (params: {
+  collegeId: string;
+  userId: string;
+  action: 'login' | 'logout' | 'otp_sent' | 'otp_verified' | 'session_terminated';
+  deviceId?: string;
+}): Promise<void> => {
+  try {
+    await db.auditLogs().insert({
+      college_id: params.collegeId,
+      user_id: params.userId,
+      action: params.action,
+      entity_type: 'auth',
+      device_id: params.deviceId,
+      created_at: new Date().toISOString(),
+    });
+  } catch {
+    // Non-critical
+  }
+};

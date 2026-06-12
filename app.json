@@ -1,4 +1,7 @@
 {
   "name": "MiniSems",
-  "displayName": "MiniSems"
+  "displayName": "MiniSems",
+  "android": {
+    "package": "com.anonymous.minisems"
+  }
 }
