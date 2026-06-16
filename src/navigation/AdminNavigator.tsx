@@ -19,6 +19,7 @@ import AddStudentScreen from '@screens/admin/AddStudentScreen';
 import AddFacultyScreen from '@screens/admin/AddFacultyScreen';
 import CreateExamScreen from '@screens/admin/CreateExamScreen';
 import BulkUploadScreen from '@screens/admin/BulkUploadScreen';
+import ProfileScreen from '@screens/ProfileScreen';
 
 import type {AdminTabParamList, AdminStackParamList} from '@apptypes/navigation.types';
 
@@ -89,6 +90,11 @@ const AdminNavigator: React.FC = () => (
       name="BulkUpload"
       component={BulkUploadScreen}
       options={{animation: 'slide_from_bottom', presentation: 'modal'}}
+    />
+    <Stack.Screen
+      name="Profile"
+      component={ProfileScreen}
+      options={{animation: 'slide_from_right'}}
     />
   </Stack.Navigator>
 );

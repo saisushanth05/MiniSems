@@ -89,11 +89,24 @@ const AddFacultyScreen: React.FC = () => {
       } else {
         if (!user?.collegeId) return;
         
-        const dummyUserId = 'd3b07384-d113-4ec6-a558-86babd9f36f9'; // Placeholder
+        // 1. Create a user record first to establish relationship
+        const {data: userData, error: userError} = await db.users().insert({
+          college_id: user.collegeId,
+          role: 'faculty',
+          mobile,
+          is_active: true,
+        }).select().single();
+
+        if (userError) throw userError;
+        if (!userData) throw new Error('Failed to create user record for faculty.');
+
+        const newUserId = userData.id;
+
+        // 2. Insert faculty record referencing the new user_id
         const {error} = await db.faculty()
           .insert({
             college_id: user.collegeId,
-            user_id: dummyUserId,
+            user_id: newUserId,
             name,
             qualification,
             mobile,

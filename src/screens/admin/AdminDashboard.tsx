@@ -61,29 +61,8 @@ const QuickActionButton: React.FC<{
 
 const AdminDashboard: React.FC = () => {
   const navigation = useNavigation<Nav>();
-  const {user, logout} = useAuthStore();
+  const {user} = useAuthStore();
   const {t} = useTranslation();
-
-  const handleLogout = useCallback(() => {
-    Alert.alert(
-      t('auth.logout'),
-      t('auth.logoutConfirm'),
-      [
-        {text: t('common.cancel'), style: 'cancel'},
-        {
-          text: t('auth.logout'),
-          style: 'destructive',
-          onPress: () => {
-            logout();
-            navigation.getParent()?.reset({
-              index: 0,
-              routes: [{name: 'RoleSelect'}],
-            });
-          },
-        },
-      ],
-    );
-  }, [logout, navigation, t]);
 
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -188,18 +167,11 @@ const AdminDashboard: React.FC = () => {
               <Text style={styles.date}>{today}</Text>
             </View>
             <View style={styles.headerRight}>
-              <LanguageSwitcher compact />
-              <TouchableOpacity style={styles.notifBtn}>
-                <Text style={styles.notifIcon}>🔔</Text>
+              <TouchableOpacity onPress={() => navigation.navigate('Profile')} style={styles.profileAvatarBtn}>
+                <LinearGradient colors={['rgba(255,255,255,0.25)', 'rgba(255,255,255,0.1)']} style={styles.profileAvatarGradient}>
+                  <Text style={styles.profileAvatarText}>{(user?.name || 'A').charAt(0).toUpperCase()}</Text>
+                </LinearGradient>
               </TouchableOpacity>
-              <TouchableOpacity onPress={handleLogout} style={styles.logoutBtn}>
-                <Text style={styles.logoutBtnText}>🚪</Text>
-              </TouchableOpacity>
-              <View style={styles.headerAvatar}>
-                <Text style={styles.headerAvatarText}>
-                  {(user?.name || 'A').charAt(0).toUpperCase()}
-                </Text>
-              </View>
             </View>
           </View>
         </LinearGradient>
@@ -392,42 +364,23 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 8,
   },
-  headerAvatar: {
+  profileAvatarBtn: {
     width: 36,
     height: 36,
     borderRadius: 18,
-    backgroundColor: 'rgba(255,255,255,0.2)',
+    overflow: 'hidden',
+  },
+  profileAvatarGradient: {
+    flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 1.5,
-    borderColor: 'rgba(255,255,255,0.4)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.3)',
   },
-  headerAvatarText: {
+  profileAvatarText: {
     fontFamily: FontFamily.bold,
     fontSize: FontSize.md,
     color: Colors.white,
-  },
-  notifBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: 'rgba(255,255,255,0.15)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  notifIcon: {
-    fontSize: 18,
-  },
-  logoutBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: 'rgba(255,255,255,0.15)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  logoutBtnText: {
-    fontSize: 18,
   },
   statsSection: {
     paddingTop: Spacing.base,

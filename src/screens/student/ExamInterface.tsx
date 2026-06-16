@@ -32,6 +32,18 @@ import {db, supabase} from '@services/supabase';
 import {useTranslation} from 'react-i18next';
 import type {StudentStackParamList} from '@apptypes/navigation.types';
 import type {ExamQuestion, LocalAnswer} from '@apptypes/exam.types';
+import * as Notifications from 'expo-notifications';
+
+// Configure notification behavior
+Notifications.setNotificationHandler({
+  handleNotification: async () => ({
+    shouldShowAlert: true,
+    shouldPlaySound: true,
+    shouldSetBadge: false,
+    shouldShowBanner: true,
+    shouldShowList: true,
+  }),
+});
 
 type Nav = NativeStackNavigationProp<StudentStackParamList, 'ExamInterface'>;
 type Route = RouteProp<StudentStackParamList, 'ExamInterface'>;
@@ -44,6 +56,21 @@ const ExamInterface: React.FC = () => {
   const {examId, sessionId} = route.params;
   const {t} = useTranslation();
   const {user} = useAuthStore();
+
+  // Request notification permissions on mount
+  useEffect(() => {
+    const requestPermissions = async () => {
+      try {
+        const { status } = await Notifications.requestPermissionsAsync();
+        if (status !== 'granted') {
+          console.log('Notification permission not granted');
+        }
+      } catch (e) {
+        console.error('Failed to request notification permission:', e);
+      }
+    };
+    requestPermissions();
+  }, []);
 
   const {
     questions,
@@ -222,6 +249,15 @@ const ExamInterface: React.FC = () => {
     const current = violationRef.current + 1;
 
     if (current === 1) {
+      // Send background warning notification immediately
+      Notifications.scheduleNotificationAsync({
+        content: {
+          title: '⚠️ ' + t('studentExam.security.warning'),
+          body: t('studentExam.security.firstViolation'),
+        },
+        trigger: null,
+      }).catch(err => console.error('Failed to send warning notification:', err));
+
       Alert.alert(
         '⚠️ ' + t('studentExam.security.warning'),
         t('studentExam.security.firstViolation'),
@@ -241,17 +277,22 @@ const ExamInterface: React.FC = () => {
         created_at: new Date().toISOString(),
       });
     } else if (current >= 2) {
-      // Auto-disqualify
+      // Send background disqualification notification immediately
+      Notifications.scheduleNotificationAsync({
+        content: {
+          title: '🚫 ' + t('studentExam.security.disqualified'),
+          body: 'You have been disqualified due to multiple security violations.',
+        },
+        trigger: null,
+      }).catch(err => console.error('Failed to send disqualification notification:', err));
+
+      // Auto-disqualify and submit
       Alert.alert(
         '🚫 Disqualified',
-        t('studentExam.security.disqualified'),
-        [{text: t('common.ok'), style: 'destructive', onPress: handleAutoSubmit}],
+        'Your exam is being automatically submitted because you left the exam screen 2 times.',
+        [{text: 'OK', style: 'destructive', onPress: handleDisqualifySubmit}],
         {cancelable: false},
       );
-
-      await db.examSessions()
-        .update({status: 'disqualified'})
-        .eq('id', sessionId);
     }
   }, [violationCount, sessionId, examId, user]);
 
@@ -273,6 +314,46 @@ const ExamInterface: React.FC = () => {
       ],
     );
   }, [questions, answers]);
+
+  const handleDisqualifySubmit = useCallback(async () => {
+    try {
+      if (autoSaveRef.current) clearInterval(autoSaveRef.current);
+      await syncAnswers();
+
+      await db.examSessions()
+        .update({
+          status: 'disqualified',
+          submitted_at: new Date().toISOString(),
+        })
+        .eq('id', sessionId);
+
+      // Log the disqualifying violation
+      await db.violations().insert({
+        college_id: user?.collegeId,
+        session_id: sessionId,
+        student_id: user?.studentId,
+        exam_id: examId,
+        type: 'app_background',
+        description: 'App switched to background (Disqualifying)',
+        is_disqualifying: true,
+        occurred_at: new Date().toISOString(),
+        created_at: new Date().toISOString(),
+      });
+
+      // Trigger result computation via edge function
+      await supabase.functions.invoke('compute-results', {
+        body: {sessionId, examId},
+      }).catch(e => console.error('Edge function trigger error:', e));
+
+      setSubmitted(true);
+      navigation.replace('ExamResult', {sessionId, examId});
+    } catch (err) {
+      console.error('Disqualify submit error:', err);
+      // Fallback: still replace screen so they are locked out
+      setSubmitted(true);
+      navigation.replace('ExamResult', {sessionId, examId});
+    }
+  }, [syncAnswers, sessionId, examId, user]);
 
   const handleAutoSubmit = useCallback(async () => {
     try {

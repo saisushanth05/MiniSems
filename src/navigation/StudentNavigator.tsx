@@ -7,6 +7,7 @@ import ExamLobby from '@screens/student/ExamLobby';
 import ExamInterface from '@screens/student/ExamInterface';
 import ExamResult from '@screens/student/ExamResult';
 import MyPerformance from '@screens/student/MyPerformance';
+import ProfileScreen from '@screens/ProfileScreen';
 import type {StudentStackParamList} from '@apptypes/navigation.types';
 
 const Stack = createNativeStackNavigator<StudentStackParamList>();
@@ -35,6 +36,11 @@ const StudentNavigator: React.FC = () => (
     <Stack.Screen
       name="MyPerformance"
       component={MyPerformance}
+      options={{animation: 'slide_from_right'}}
+    />
+    <Stack.Screen
+      name="Profile"
+      component={ProfileScreen}
       options={{animation: 'slide_from_right'}}
     />
   </Stack.Navigator>

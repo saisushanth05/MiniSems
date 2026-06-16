@@ -1091,7 +1091,7 @@ BEGIN
   )
   WHERE id = NEW.session_id;
 
-  IF (SELECT violation_count FROM exam_sessions WHERE id = NEW.session_id) >= 3 THEN
+  IF (SELECT violation_count FROM exam_sessions WHERE id = NEW.session_id) >= 2 THEN
     UPDATE exam_sessions SET status = 'disqualified' WHERE id = NEW.session_id;
   END IF;
   RETURN NEW;

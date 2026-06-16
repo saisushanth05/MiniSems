@@ -42,6 +42,8 @@ const ExamLobby: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [starting, setStarting] = useState(false);
   const [checks, setChecks] = useState({internet: false, device: false, checking: true});
+  const [isExamOpen, setIsExamOpen] = useState(false);
+  const [timeToStartSeconds, setTimeToStartSeconds] = useState(0);
 
   useEffect(() => {
     const load = async () => {
@@ -58,6 +60,32 @@ const ExamLobby: React.FC = () => {
     load();
   }, [examId]);
 
+  useEffect(() => {
+    if (!exam) return;
+
+    const calculateTimeRemaining = () => {
+      const examStartStr = `${exam.scheduled_date}T${exam.start_time}`;
+      const examStart = new Date(examStartStr);
+      const now = new Date();
+      const diffMs = examStart.getTime() - now.getTime();
+      const diffSecs = Math.max(0, Math.floor(diffMs / 1000));
+      
+      setTimeToStartSeconds(diffSecs);
+      setIsExamOpen(diffSecs <= 0);
+    };
+
+    calculateTimeRemaining();
+    const interval = setInterval(calculateTimeRemaining, 1000);
+    return () => clearInterval(interval);
+  }, [exam]);
+
+  const formatStartTimer = (totalSeconds: number): string => {
+    const h = Math.floor(totalSeconds / 3600);
+    const m = Math.floor((totalSeconds % 3600) / 60);
+    const s = totalSeconds % 60;
+    return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+  };
+
   const handleStart = async () => {
     if (!checks.internet) {
       Alert.alert('No Internet', 'Please connect to internet before starting the exam.');
@@ -65,19 +93,63 @@ const ExamLobby: React.FC = () => {
     }
     setStarting(true);
     try {
-      // Create exam session
-      const {data: session, error} = await db.examSessions().insert({
-        college_id: user?.collegeId,
-        exam_id: examId,
-        student_id: user?.studentId,
-        device_id: user?.deviceId || 'unknown',
-        status: 'in_progress',
-        started_at: new Date().toISOString(),
-        created_at: new Date().toISOString(),
-      }).select().single();
+      // 1. Check if session already exists for this exam and student
+      const { data: existingSession, error: checkError } = await db.examSessions()
+        .select('*')
+        .eq('exam_id', examId)
+        .eq('student_id', user?.studentId)
+        .maybeSingle();
 
-      if (error) throw error;
-      navigation.replace('ExamInterface', {examId, sessionId: session.id});
+      if (checkError) throw checkError;
+
+      let sessionId = '';
+
+      if (existingSession) {
+        if (existingSession.status === 'in_progress') {
+          // Resume existing session
+          sessionId = existingSession.id;
+        } else if (exam?.allow_reattempt) {
+          // Re-attempt allowed: delete existing session to start fresh (cascade deletes answers & violations)
+          const { error: deleteError } = await db.examSessions()
+            .delete()
+            .eq('id', existingSession.id);
+            
+          if (deleteError) throw deleteError;
+          
+          // Create new session
+          const { data: newSession, error: insertError } = await db.examSessions().insert({
+            college_id: user?.collegeId,
+            exam_id: examId,
+            student_id: user?.studentId,
+            device_id: user?.deviceId || 'unknown',
+            status: 'in_progress',
+            started_at: new Date().toISOString(),
+            created_at: new Date().toISOString(),
+          }).select().single();
+
+          if (insertError) throw insertError;
+          sessionId = newSession.id;
+        } else {
+          Alert.alert('Already Attempted', 'You have already submitted this exam and re-attempts are not allowed.');
+          return;
+        }
+      } else {
+        // Create new session
+        const { data: newSession, error: insertError } = await db.examSessions().insert({
+          college_id: user?.collegeId,
+          exam_id: examId,
+          student_id: user?.studentId,
+          device_id: user?.deviceId || 'unknown',
+          status: 'in_progress',
+          started_at: new Date().toISOString(),
+          created_at: new Date().toISOString(),
+        }).select().single();
+
+        if (insertError) throw insertError;
+        sessionId = newSession.id;
+      }
+
+      navigation.replace('ExamInterface', {examId, sessionId});
     } catch (err: unknown) {
       Alert.alert('Error', err instanceof Error ? err.message : 'Failed to start exam');
     } finally {
@@ -162,14 +234,26 @@ const ExamLobby: React.FC = () => {
 
         {/* Start Button */}
         <View style={styles.startSection}>
+          {!isExamOpen && (
+            <View style={styles.countdownContainer}>
+              <Text style={styles.countdownTitle}>Exam starts in:</Text>
+              <Text style={styles.countdownValue}>{formatStartTimer(timeToStartSeconds)}</Text>
+            </View>
+          )}
           <Button
-            title={starting ? 'Starting...' : t('studentExam.readyButton')}
+            title={
+              starting
+                ? 'Starting...'
+                : !isExamOpen
+                ? 'Exam Locked'
+                : t('studentExam.readyButton')
+            }
             variant="gradient"
             gradientColors={TYPE_GRADIENT[exam.exam_type]}
             size="xl"
             fullWidth
             loading={starting}
-            disabled={checks.checking}
+            disabled={checks.checking || !isExamOpen}
             onPress={handleStart}
           />
         </View>
@@ -197,6 +281,26 @@ const styles = StyleSheet.create({
   instructions: {fontFamily: FontFamily.regular, fontSize: FontSize.base, color: Colors.textSecondary, lineHeight: FontSize.base * 1.6},
   rule: {fontFamily: FontFamily.medium, fontSize: FontSize.base, color: Colors.textSecondary, paddingVertical: 4, lineHeight: FontSize.base * 1.5},
   startSection: {padding: Spacing.base, paddingTop: Spacing.xl},
+  countdownContainer: {
+    alignItems: 'center',
+    marginBottom: Spacing.md,
+    backgroundColor: Colors.surfaceVariant,
+    padding: Spacing.md,
+    borderRadius: BorderRadius.lg,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  countdownTitle: {
+    fontFamily: FontFamily.medium,
+    fontSize: FontSize.sm,
+    color: Colors.textSecondary,
+    marginBottom: 4,
+  },
+  countdownValue: {
+    fontFamily: FontFamily.bold,
+    fontSize: FontSize.xl,
+    color: Colors.primary,
+  },
 });
 
 const checkStyles = StyleSheet.create({

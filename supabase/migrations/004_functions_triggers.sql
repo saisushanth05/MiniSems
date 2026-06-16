@@ -337,8 +337,8 @@ BEGIN
   )
   WHERE id = NEW.session_id;
 
-  -- Auto-disqualify on 3rd violation
-  IF (SELECT violation_count FROM exam_sessions WHERE id = NEW.session_id) >= 3 THEN
+  -- Auto-disqualify on 2nd violation
+  IF (SELECT violation_count FROM exam_sessions WHERE id = NEW.session_id) >= 2 THEN
     UPDATE exam_sessions SET status = 'disqualified' WHERE id = NEW.session_id;
   END IF;
   RETURN NEW;

@@ -34,6 +34,7 @@ export type AdminStackParamList = {
   FacultyDetail: {facultyId: string};
   BulkUpload: undefined;
   ReportDetail: {reportType: string; examId?: string};
+  Profile: undefined;
 };
 
 // Faculty Navigation
@@ -52,6 +53,7 @@ export type FacultyStackParamList = {
   ExamMonitor: {examId: string};
   ResultDetail: {examId: string};
   QuestionPreview: {questionId: string};
+  Profile: undefined;
 };
 
 // Student Navigation
@@ -62,6 +64,7 @@ export type StudentStackParamList = {
   ExamResult: {sessionId: string; examId: string};
   MyPerformance: undefined;
   ExamHistory: undefined;
+  Profile: undefined;
 };
 
 // Parent Navigation

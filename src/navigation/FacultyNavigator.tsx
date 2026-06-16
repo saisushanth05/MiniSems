@@ -14,6 +14,7 @@ import QuestionBuilder from '@screens/faculty/QuestionBuilder';
 import ExamBuilder from '@screens/faculty/ExamBuilder';
 import LiveExamMonitor from '@screens/faculty/LiveExamMonitor';
 import ResultsReview from '@screens/faculty/ResultsReview';
+import ProfileScreen from '@screens/ProfileScreen';
 
 import type {FacultyTabParamList, FacultyStackParamList} from '@apptypes/navigation.types';
 
@@ -70,6 +71,11 @@ const FacultyNavigator: React.FC = () => (
     <Stack.Screen
       name="ResultDetail"
       component={ResultsReview}
+      options={{animation: 'slide_from_right'}}
+    />
+    <Stack.Screen
+      name="Profile"
+      component={ProfileScreen}
       options={{animation: 'slide_from_right'}}
     />
   </Stack.Navigator>

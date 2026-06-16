@@ -98,13 +98,24 @@ const AddStudentScreen: React.FC = () => {
         // Insert
         if (!user?.collegeId) return;
         
-        // In real system, we first create a user auth record, or we just insert profile
-        // Let's create user entry or link to dummy user id
-        const dummyUserId = 'd3b07384-d113-4ec6-a558-86babd9f36f9'; // Placeholder
+        // 1. Create a user record first to establish relationship
+        const {data: userData, error: userError} = await db.users().insert({
+          college_id: user.collegeId,
+          role: 'student',
+          mobile,
+          is_active: true,
+        }).select().single();
+
+        if (userError) throw userError;
+        if (!userData) throw new Error('Failed to create user record for student.');
+
+        const newUserId = userData.id;
+
+        // 2. Insert student record referencing the new user_id
         const {error} = await db.students()
           .insert({
             college_id: user.collegeId,
-            user_id: dummyUserId,
+            user_id: newUserId,
             name,
             roll_number: rollNumber,
             mobile,

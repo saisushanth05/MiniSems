@@ -19,34 +19,13 @@ import type {NativeStackNavigationProp} from '@react-navigation/native-stack';
 import type {RootStackParamList} from '@apptypes/navigation.types';
 
 const FacultyDashboard: React.FC = () => {
-  const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
-  const {user, logout} = useAuthStore();
+  const navigation = useNavigation<any>();
+  const {user} = useAuthStore();
   const {t} = useTranslation();
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [upcomingExams, setUpcomingExams] = useState<Exam[]>([]);
   const [stats, setStats] = useState({questionCount: 0, avgScore: 0, highScore: 0, lowScore: 0});
-
-  const handleLogout = useCallback(() => {
-    Alert.alert(
-      t('auth.logout'),
-      t('auth.logoutConfirm'),
-      [
-        {text: t('common.cancel'), style: 'cancel'},
-        {
-          text: t('auth.logout'),
-          style: 'destructive',
-          onPress: () => {
-            logout();
-            navigation.getParent()?.reset({
-              index: 0,
-              routes: [{name: 'RoleSelect'}],
-            });
-          },
-        },
-      ],
-    );
-  }, [logout, navigation, t]);
 
   const fetchData = useCallback(async () => {
     if (!user?.collegeId) return;
@@ -78,9 +57,10 @@ const FacultyDashboard: React.FC = () => {
               <Text style={styles.subGreeting}>Faculty Portal</Text>
             </View>
             <View style={styles.headerRight}>
-              <LanguageSwitcher compact />
-              <TouchableOpacity onPress={handleLogout} style={styles.logoutBtn}>
-                <Text style={styles.logoutBtnText}>🚪</Text>
+              <TouchableOpacity onPress={() => navigation.navigate('Profile')} style={styles.profileAvatarBtn}>
+                <LinearGradient colors={['rgba(255,255,255,0.25)', 'rgba(255,255,255,0.1)']} style={styles.profileAvatarGradient}>
+                  <Text style={styles.profileAvatarText}>{(user?.name || 'F').charAt(0).toUpperCase()}</Text>
+                </LinearGradient>
               </TouchableOpacity>
             </View>
           </View>
@@ -109,8 +89,9 @@ const styles = StyleSheet.create({
   header: {padding: Spacing.base, paddingBottom: Spacing.xl},
   headerRow: {flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start'},
   headerRight: {flexDirection: 'row', alignItems: 'center', gap: 8},
-  logoutBtn: {width: 36, height: 36, borderRadius: 18, backgroundColor: 'rgba(255,255,255,0.2)', alignItems: 'center', justifyContent: 'center'},
-  logoutBtnText: {fontSize: 18},
+  profileAvatarBtn: {width: 36, height: 36, borderRadius: 18, overflow: 'hidden'},
+  profileAvatarGradient: {flex: 1, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: 'rgba(255,255,255,0.3)'},
+  profileAvatarText: {fontFamily: FontFamily.bold, fontSize: FontSize.md, color: Colors.white},
   greeting: {fontFamily: FontFamily.bold, fontSize: FontSize['2xl'], color: Colors.white},
   subGreeting: {fontFamily: FontFamily.medium, fontSize: FontSize.base, color: 'rgba(255,255,255,0.8)', marginTop: 2},
   statsRow: {flexDirection: 'row', gap: 12, paddingHorizontal: Spacing.base, paddingVertical: Spacing.md},

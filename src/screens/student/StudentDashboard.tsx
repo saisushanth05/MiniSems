@@ -16,43 +16,21 @@ import {BorderRadius, Shadow, Spacing} from '@theme/spacing';
 import {ExamCard} from '@components/exam/ExamCard';
 import {SkeletonExamCard} from '@components/common/SkeletonLoader';
 import {useAuthStore} from '@stores/authStore';
-import {db} from '@services/supabase';
+import {db, supabase} from '@services/supabase';
 import type {StudentStackParamList} from '@apptypes/navigation.types';
 import type {Exam} from '@apptypes/database.types';
 import {useTranslation} from 'react-i18next';
-import {LanguageSwitcher} from '@components/common/LanguageSwitcher';
 
 type Nav = NativeStackNavigationProp<StudentStackParamList, 'StudentDashboard'>;
 
 const StudentDashboard: React.FC = () => {
   const navigation = useNavigation<Nav>();
-  const {user, logout} = useAuthStore();
+  const {user} = useAuthStore();
   const {t} = useTranslation();
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [upcomingExams, setUpcomingExams] = useState<Exam[]>([]);
   const [completedExams, setCompletedExams] = useState<Exam[]>([]);
-
-  const handleLogout = useCallback(() => {
-    Alert.alert(
-      t('auth.logout'),
-      t('auth.logoutConfirm'),
-      [
-        {text: t('common.cancel'), style: 'cancel'},
-        {
-          text: t('auth.logout'),
-          style: 'destructive',
-          onPress: () => {
-            logout();
-            navigation.getParent()?.reset({
-              index: 0,
-              routes: [{name: 'RoleSelect'}],
-            });
-          },
-        },
-      ],
-    );
-  }, [logout, navigation, t]);
 
   const fetchExams = useCallback(async () => {
     if (!user?.collegeId) return;
@@ -72,7 +50,30 @@ const StudentDashboard: React.FC = () => {
     }
   }, [user?.collegeId]);
 
-  useEffect(() => {fetchExams();}, [fetchExams]);
+  useEffect(() => {
+    fetchExams();
+
+    // Subscribe to exams in real-time
+    if (!user?.collegeId) return;
+    const channel = supabase.channel('student-dashboard-exams')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'exams',
+          filter: `college_id=eq.${user.collegeId}`,
+        },
+        () => {
+          fetchExams();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [user?.collegeId, fetchExams]);
 
   return (
     <SafeAreaView style={styles.container}>
@@ -89,12 +90,13 @@ const StudentDashboard: React.FC = () => {
               <Text style={styles.subGreeting}>Ready for today's exam?</Text>
             </View>
             <View style={styles.headerRight}>
-              <LanguageSwitcher compact />
               <TouchableOpacity onPress={() => navigation.navigate('MyPerformance')} style={styles.performanceBtn}>
                 <Text style={styles.performanceBtnText}>📈</Text>
               </TouchableOpacity>
-              <TouchableOpacity onPress={handleLogout} style={styles.logoutBtn}>
-                <Text style={styles.logoutBtnText}>🚪</Text>
+              <TouchableOpacity onPress={() => navigation.navigate('Profile')} style={styles.profileAvatarBtn}>
+                <LinearGradient colors={['rgba(255,255,255,0.25)', 'rgba(255,255,255,0.1)']} style={styles.profileAvatarGradient}>
+                  <Text style={styles.profileAvatarText}>{(user?.name || 'S').charAt(0).toUpperCase()}</Text>
+                </LinearGradient>
               </TouchableOpacity>
             </View>
           </View>
@@ -160,8 +162,9 @@ const styles = StyleSheet.create({
   headerRight: {flexDirection: 'row', alignItems: 'center', gap: 8},
   performanceBtn: {width: 36, height: 36, borderRadius: 18, backgroundColor: 'rgba(255,255,255,0.2)', alignItems: 'center', justifyContent: 'center'},
   performanceBtnText: {fontSize: 18},
-  logoutBtn: {width: 36, height: 36, borderRadius: 18, backgroundColor: 'rgba(255,255,255,0.2)', alignItems: 'center', justifyContent: 'center'},
-  logoutBtnText: {fontSize: 18},
+  profileAvatarBtn: {width: 36, height: 36, borderRadius: 18, overflow: 'hidden'},
+  profileAvatarGradient: {flex: 1, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: 'rgba(255,255,255,0.3)'},
+  profileAvatarText: {fontFamily: FontFamily.bold, fontSize: FontSize.md, color: Colors.white},
   studentChip: {backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: BorderRadius.full, paddingHorizontal: 12, paddingVertical: 5, alignSelf: 'flex-start', borderWidth: 1, borderColor: 'rgba(255,255,255,0.35)'},
   chipText: {fontFamily: FontFamily.semiBold, fontSize: FontSize.sm, color: Colors.white},
   section: {padding: Spacing.base, marginTop: Spacing.sm},
