@@ -1,0 +1,6 @@
+{"_e":"root:init","_t":1781621926312,"format":"v0-jsonl","version":"56.1.15"}
+{"_e":"env:mode","_t":1781621926755,"nodeEnv":"production","babelEnv":"production","mode":"production"}
+{"_e":"env:load","_t":1781621926762,"mode":"production","files":["../..\\..\\.env"],"env":{"EXPO_PUBLIC_SUPABASE_ANON_KEY":"sb_publishable_s98tBwJ8u6Mgqf0rdQp5FQ_S9Rxo_jb","EXPO_PUBLIC_SUPABASE_URL":"https://fryeammpjqcwkiknevng.supabase.co","SUPABASE_ANON_KEY":"sb_publishable_s98tBwJ8u6Mgqf0rdQp5FQ_S9Rxo_jb","SUPABASE_SERVICE_ROLE_KEY":"your-service-role-key-here","SUPABASE_URL":"https://fryeammpjqcwkiknevng.supabase.co"}}
+{"_e":"devserver:start","_t":1781621926794,"mode":"production","web":true,"baseUrl":"","asyncRoutes":false,"routerRoot":"../..\\..\\app","serverComponents":false,"serverActions":false,"serverRendering":false,"apiRoutes":false,"exporting":true}
+{"_e":"metro:config","_t":1781621927471,"serverRoot":"../..\\..","projectRoot":"../..\\..","exporting":true,"flags":{"autolinkingModuleResolution":false,"serverActions":false,"serverComponents":false,"reactCompiler":false,"optimizeGraph":false,"treeshaking":false,"logbox":false}}
+{"_e":"metro:instantiate","_t":1781621927850,"atlas":false,"workers":8,"host":null,"port":null}

@@ -1,11 +1,15 @@
-const { getDefaultConfig, mergeConfig } = require('@react-native/metro-config');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { getDefaultConfig } = require('expo/metro-config');
+const { mergeConfig } = require('@react-native/metro-config');
 
 /**
- * Metro configuration
- * https://reactnative.dev/docs/metro
+ * Metro configuration for Expo SDK 56 + EAS Build
+ * https://docs.expo.dev/guides/customizing-metro/
  *
- * @type {import('@react-native/metro-config').MetroConfig}
+ * @type {import('expo/metro-config').MetroConfig}
  */
+const defaultConfig = getDefaultConfig(__dirname);
+
 const config = {
   resolver: {
     blockList: [
@@ -16,4 +20,4 @@ const config = {
   },
 };
 
-module.exports = mergeConfig(getDefaultConfig(__dirname), config);
+module.exports = mergeConfig(defaultConfig, config);
