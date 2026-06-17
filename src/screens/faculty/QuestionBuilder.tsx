@@ -236,33 +236,50 @@ const QuestionBuilder: React.FC = () => {
         throw new Error('No valid rows found. Please check format & headers.');
       }
 
-      // Pre-load subjects to match codes
+      // Guard: subjects must be loaded before we can map codes
+      if (subjects.length === 0) {
+        throw new Error(
+          'No subjects loaded for this college. Please wait for the page to finish loading, then try again.',
+        );
+      }
+
+      // Pre-load subjects to match codes (trimmed + uppercased on both sides)
       const subjectMap = subjects.reduce((acc, sub) => {
-        acc[sub.code.toUpperCase()] = sub.id;
+        acc[sub.code.trim().toUpperCase()] = sub.id;
         return acc;
       }, {} as Record<string, string>);
 
+      const availableCodes = Object.keys(subjectMap).join(', ');
+
       const questionsToInsert: any[] = [];
-      let skippedCount = 0;
+      const skippedCodes = new Set<string>();
 
       for (let i = 0; i < rows.length; i++) {
         const row = rows[i];
-        const subjectCode = row[0].toUpperCase();
+        // Trim whitespace & normalise before matching
+        const subjectCode = row[0].trim().toUpperCase();
         const subId = subjectMap[subjectCode];
-        
+
         if (!subId) {
-          skippedCount++;
+          skippedCodes.add(subjectCode);
           continue;
         }
 
-        const questionText = row[1];
-        const optA = row[2];
-        const optB = row[3];
-        const optC = row[4];
-        const optD = row[5];
-        const correctAns = row[6].toUpperCase();
+        const questionText = row[1]?.trim();
+        const optA = row[2]?.trim();
+        const optB = row[3]?.trim();
+        const optC = row[4]?.trim();
+        const optD = row[5]?.trim();
+        const correctAns = row[6]?.trim().toUpperCase();
         const rowMarks = parseFloat(row[7]) || 1.0;
-        const rowDiff = (row[8]?.toLowerCase() || 'medium') as 'easy' | 'medium' | 'hard';
+        const rowDiff = (row[8]?.trim().toLowerCase() || 'medium') as
+          | 'easy'
+          | 'medium'
+          | 'hard';
+
+        if (!questionText || !correctAns) {
+          continue; // skip blank / malformed rows silently
+        }
 
         questionsToInsert.push({
           college_id: user?.collegeId,
@@ -284,12 +301,22 @@ const QuestionBuilder: React.FC = () => {
       if (questionsToInsert.length > 0) {
         const {error} = await db.questions().insert(questionsToInsert);
         if (error) throw error;
-        
-        setBulkReport(`Import Report: Successfully uploaded ${questionsToInsert.length} questions. Skipped ${skippedCount} rows due to unmatched subject codes.`);
+
+        const skippedMsg =
+          skippedCodes.size > 0
+            ? ` Skipped ${skippedCodes.size} rows — unrecognised codes: [${[...skippedCodes].join(', ')}].`
+            : '';
+        setBulkReport(
+          `✅ Successfully uploaded ${questionsToInsert.length} questions.${skippedMsg}`,
+        );
         setFileSelected(null);
         loadData();
       } else {
-        throw new Error('Zero questions imported. Verify that subject codes (e.g. PHY, MATH, CHEM) exist in this college.');
+        // Give the teacher actionable diagnostic info
+        const missingCodes = [...skippedCodes].join(', ') || 'unknown';
+        throw new Error(
+          `Zero questions imported.\n\nCodes found in your CSV: ${missingCodes}\nCodes registered in college: ${availableCodes}\n\nMake sure they match exactly (e.g. "PHY" not "Physics").`,
+        );
       }
     } catch (err: any) {
       Alert.alert('Upload Failed', err.message || 'Error processing CSV.');
