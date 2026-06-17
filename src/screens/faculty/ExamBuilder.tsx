@@ -191,20 +191,52 @@ const ExamBuilder: React.FC = () => {
         throw new Error('No valid rows found. Check your columns.');
       }
 
+      // Build subject lookup map: by code AND by name keywords for flexible matching
       const subjectMap = subjects.reduce((acc, sub) => {
-        acc[sub.code.toUpperCase()] = sub.id;
+        // Match by code (exact)
+        if (sub.code) acc[sub.code.toUpperCase()] = sub.id;
+        // Also match by name prefix (first word) — e.g. "Physics" → "PHYSICS"
+        if (sub.name) acc[sub.name.toUpperCase()] = sub.id;
         return acc;
       }, {} as Record<string, string>);
 
+      // Common alias map — CSV uses short codes, DB may use full names
+      const ALIAS_MAP: Record<string, string[]> = {
+        'PHY':  ['PHYSICS', 'PHYSICAL SCIENCE'],
+        'MATH': ['MATHEMATICS', 'MATHS', 'MATH'],
+        'CHEM': ['CHEMISTRY', 'CHEMICAL SCIENCE'],
+        'BIO':  ['BIOLOGY', 'BIOLOGICAL SCIENCE'],
+        'ENG':  ['ENGLISH', 'ENGLISH LANGUAGE'],
+        'CS':   ['COMPUTER SCIENCE', 'COMPUTERS'],
+        'ECO':  ['ECONOMICS', 'ECONOMY'],
+        'COM':  ['COMMERCE', 'COMMERCIAL'],
+        'TEL':  ['TELUGU'],
+        'HIN':  ['HINDI'],
+      };
+
+      // Expand alias map into subject lookup
+      Object.entries(ALIAS_MAP).forEach(([shortCode, aliases]) => {
+        aliases.forEach(alias => {
+          if (subjectMap[alias]) {
+            // DB has this subject by full name — add short code mapping too
+            subjectMap[shortCode] = subjectMap[shortCode] || subjectMap[alias];
+          }
+        });
+      });
+
+      const availableCodes = subjects
+        .map(s => [s.code, s.name].filter(Boolean).join(' / '))
+        .join(', ');
+
       const questionsToParse: any[] = [];
-      let skippedCount = 0;
+      let skippedRows: string[] = [];
 
       for (let i = 0; i < rows.length; i++) {
         const row = rows[i];
-        const subjectCode = row[0].toUpperCase();
+        const subjectCode = row[0].toUpperCase().trim();
         const subId = subjectMap[subjectCode];
         if (!subId) {
-          skippedCount++;
+          skippedRows.push(`Row ${i + 1}: subject code "${row[0]}" not found`);
           continue;
         }
 
@@ -227,13 +259,15 @@ const ExamBuilder: React.FC = () => {
 
       if (questionsToParse.length > 0) {
         setParsedQuestions(questionsToParse);
-        if (skippedCount > 0) {
-          Alert.alert('Success', `Parsed ${questionsToParse.length} questions. Skipped ${skippedCount} rows with unmatched subject codes.`);
-        } else {
-          Alert.alert('Success', `Parsed ${questionsToParse.length} questions from CSV successfully.`);
-        }
+        const skipMsg = skippedRows.length > 0
+          ? `\n\nSkipped ${skippedRows.length} rows (unmatched codes).`
+          : '';
+        Alert.alert('Success', `Parsed ${questionsToParse.length} questions from CSV successfully.${skipMsg}`);
       } else {
-        throw new Error('No questions could be matched. Verify subject codes (e.g. PHY, MATH) exist in the system.');
+        const hint = availableCodes
+          ? `\n\nSubjects in DB: ${availableCodes}`
+          : '\n\nNo subjects found for this college. Please add subjects first.';
+        throw new Error(`No questions matched any subject.${hint}`);
       }
     } catch (err: any) {
       Alert.alert('Parse Failed', err.message || 'Error processing CSV.');
