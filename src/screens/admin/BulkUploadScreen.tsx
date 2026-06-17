@@ -15,7 +15,7 @@ import {useTranslation} from 'react-i18next';
 import {useAuthStore} from '@stores/authStore';
 import {db} from '@services/supabase';
 import * as DocumentPicker from 'expo-document-picker';
-import * as FileSystem from 'expo-file-system';
+import * as FileSystem from 'expo-file-system/legacy';
 import {read, utils} from 'xlsx';
 
 const BulkUploadScreen: React.FC = () => {
