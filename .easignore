@@ -1,0 +1,38 @@
+# EAS Build — files to exclude from the uploaded tarball
+# Keeps the tarball small so uploads don't time out (ECONNRESET)
+
+# Android local build outputs
+android/app/build/
+android/build/
+android/.gradle/
+android/app/.cxx/
+
+# node_modules Android build artifacts (very large, not needed by EAS)
+node_modules/**/android/build/
+node_modules/**/android/.gradle/
+node_modules/**/android/.cxx/
+node_modules/**/.gradle/
+
+# iOS build artifacts
+ios/build/
+ios/Pods/
+ios/DerivedData/
+
+# Metro bundler cache
+.metro-health-check*
+
+# Local env files (keep secrets off EAS)
+.env.local
+.env.*.local
+
+# Editor / OS noise
+.DS_Store
+Thumbs.db
+*.log
+
+# Test & coverage
+coverage/
+__tests__/__snapshots__/
+
+# Sample / scratch files
+sample_questions.csv
