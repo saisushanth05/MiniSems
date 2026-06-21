@@ -19,6 +19,7 @@ import AddStudentScreen from '@screens/admin/AddStudentScreen';
 import AddFacultyScreen from '@screens/admin/AddFacultyScreen';
 import CreateExamScreen from '@screens/admin/CreateExamScreen';
 import BulkUploadScreen from '@screens/admin/BulkUploadScreen';
+import UserManagement from '@screens/admin/UserManagement';
 import ProfileScreen from '@screens/ProfileScreen';
 
 import type {AdminTabParamList, AdminStackParamList} from '@apptypes/navigation.types';
@@ -28,8 +29,7 @@ const Stack = createNativeStackNavigator<AdminStackParamList>();
 
 const TAB_ICONS: Record<string, {active: string; inactive: string}> = {
   Dashboard: {active: '🏠', inactive: '🏠'},
-  Students: {active: '👥', inactive: '👥'},
-  Faculty: {active: '👨‍🏫', inactive: '👨‍🏫'},
+  Users: {active: '👥', inactive: '👥'},
   Calendar: {active: '📅', inactive: '📅'},
   Reports: {active: '📊', inactive: '📊'},
 };
@@ -60,10 +60,9 @@ const AdminTabs: React.FC = () => {
         },
       })}>
     <Tab.Screen name="Dashboard" component={AdminDashboard} options={{tabBarLabel: 'Dashboard'}} />
-    <Tab.Screen name="Students" component={StudentManagement} options={{tabBarLabel: 'Students'}} />
-    <Tab.Screen name="Faculty" component={FacultyManagement} options={{tabBarLabel: 'Faculty'}} />
-    <Tab.Screen name="Calendar" component={ExamCalendar} options={{tabBarLabel: 'Calendar'}} />
-    <Tab.Screen name="Reports" component={ReportsAnalytics} options={{tabBarLabel: 'Reports'}} />
+  <Tab.Screen name="Users" component={UserManagement} options={{tabBarLabel: 'Users'}} />
+  <Tab.Screen name="Calendar" component={ExamCalendar} options={{tabBarLabel: 'Calendar'}} />
+  <Tab.Screen name="Reports" component={ReportsAnalytics} options={{tabBarLabel: 'Reports'}} />
   </Tab.Navigator>
   );
 };
@@ -90,6 +89,11 @@ const AdminNavigator: React.FC = () => (
       name="BulkUpload"
       component={BulkUploadScreen}
       options={{animation: 'slide_from_bottom', presentation: 'modal'}}
+    />
+    <Stack.Screen
+      name="UserManagement"
+      component={UserManagement}
+      options={{animation: 'slide_from_right'}}
     />
     <Stack.Screen
       name="Profile"

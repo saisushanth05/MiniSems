@@ -10,11 +10,12 @@ import type {ApiResponse} from '@apptypes/database.types';
 export const sendOTP = async (
   request: LoginRequest,
 ): Promise<ApiResponse<{message: string; expiresIn: number}>> => {
-  // Local development mock bypass
-  if (__DEV__ || !request.mobile.startsWith('+999')) {
-    console.log('Development Mode: Bypassing send-otp edge function');
+  // Demo bypass ONLY for seeded test accounts
+  const isDemoNumber = request.mobile === '9999999999' || request.mobile === '8888888888';
+  if (isDemoNumber) {
+    console.log('Demo account: Bypassing real OTP send');
     return {
-      data: { message: 'OTP sent successfully (Local Dev Mode: Use 123456)', expiresIn: 300 },
+      data: { message: 'OTP sent (Demo mode — use 123456)', expiresIn: 300 },
       error: null,
     };
   }
@@ -40,9 +41,10 @@ export const sendOTP = async (
 export const verifyOTPAndLogin = async (
   request: OTPVerifyRequest,
 ): Promise<ApiResponse<OTPVerifyResponse>> => {
-  // Local development mock bypass
-  if (__DEV__ || !request.mobile.startsWith('+999')) {
-    console.log('Development Mode: Bypassing verify-otp-login edge function');
+  // Demo bypass ONLY for seeded test accounts (use OTP 123456)
+  const isDemoNumber = request.mobile === '9999999999' || request.mobile === '8888888888';
+  if (isDemoNumber) {
+    console.log('Demo account: Bypassing real OTP verification');
     if (request.otp === '123456') {
       const isStudent = request.role === 'student';
       const isFaculty = request.role === 'faculty';
@@ -63,7 +65,7 @@ export const verifyOTPAndLogin = async (
           isNewDevice: false,
           user: {
             id: userId,
-            collegeId: 'd3b07384-d113-4c9b-8e12-421739c99182', // Matches default seeded college ID
+            collegeId: 'd3b07384-d113-4c9b-8e12-421739c99182',
             role: request.role,
             mobile: request.mobile,
             name: 'Demo ' + request.role.charAt(0).toUpperCase() + request.role.slice(1),
@@ -80,7 +82,7 @@ export const verifyOTPAndLogin = async (
         error: null,
       };
     } else {
-      return { data: null, error: { message: 'Invalid OTP code! For local dev, enter 123456.' } };
+      return { data: null, error: { message: 'Invalid OTP! For demo accounts, use 123456.' } };
     }
   }
 

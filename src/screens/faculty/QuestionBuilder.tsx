@@ -54,37 +54,61 @@ const QuestionBuilder: React.FC = () => {
   const [bulkReport, setBulkReport] = useState<string | null>(null);
   const [uploadingBulk, setUploadingBulk] = useState(false);
 
+  // ── Fetch subjects independently (only needs collegeId, NOT facultyId) ──
+  const loadSubjects = useCallback(async () => {
+    if (!user?.collegeId) return;
+    try {
+      const {data, error} = await db.subjects()
+        .select('*')
+        .eq('college_id', user.collegeId)
+        .eq('is_active', true);
+      if (error) throw error;
+      if (data && data.length > 0) {
+        setSubjects(data);
+        setSubjectId(prev => prev || data[0].id);
+      }
+    } catch (err) {
+      console.error('Failed to load subjects:', err);
+    }
+  }, [user?.collegeId]);
+
   // ── Fetch questions & subjects ──
   const loadData = useCallback(async () => {
-    if (!user?.collegeId || !user?.facultyId) return;
+    if (!user?.collegeId) return;
     setLoading(true);
     try {
-      const [questionsRes, subjectsRes] = await Promise.all([
-        db.questions()
-          .select('*, subject:subjects(name)')
-          .eq('created_by', user.facultyId)
-          .order('created_at', {ascending: false}),
-        db.subjects()
-          .select('*')
-          .eq('college_id', user.collegeId)
-          .eq('is_active', true),
+      // Fetch questions — filter by facultyId when available, else fetch all for college
+      const questionsQuery = user?.facultyId
+        ? db.questions()
+            .select('*, subject:subjects(name)')
+            .eq('created_by', user.facultyId)
+            .order('created_at', {ascending: false})
+        : db.questions()
+            .select('*, subject:subjects(name)')
+            .eq('college_id', user.collegeId)
+            .order('created_at', {ascending: false});
+
+      const [questionsRes] = await Promise.all([
+        questionsQuery,
+        loadSubjects(), // Always reload subjects alongside questions
       ]);
 
       if (questionsRes.data) setQuestions(questionsRes.data);
-      if (subjectsRes.data) {
-        setSubjects(subjectsRes.data);
-        if (subjectsRes.data.length > 0) setSubjectId(subjectsRes.data[0].id);
-      }
     } catch (err) {
       console.error('Failed to load questions:', err);
     } finally {
       setLoading(false);
     }
-  }, [user]);
+  }, [user, loadSubjects]);
 
   useEffect(() => {
     loadData();
   }, [loadData]);
+
+  // Extra safety: fetch subjects whenever collegeId is available (covers race conditions)
+  useEffect(() => {
+    loadSubjects();
+  }, [loadSubjects]);
 
   // ── Delete Question ──
   const handleDelete = (id: string) => {
@@ -236,15 +260,27 @@ const QuestionBuilder: React.FC = () => {
         throw new Error('No valid rows found. Please check format & headers.');
       }
 
-      // Guard: subjects must be loaded before we can map codes
-      if (subjects.length === 0) {
+      // If subjects are still empty, try fetching them now (safety net for slow loads)
+      let currentSubjects = subjects;
+      if (currentSubjects.length === 0 && user?.collegeId) {
+        const {data} = await db.subjects()
+          .select('*')
+          .eq('college_id', user.collegeId)
+          .eq('is_active', true);
+        if (data && data.length > 0) {
+          currentSubjects = data;
+          setSubjects(data);
+        }
+      }
+
+      if (currentSubjects.length === 0) {
         throw new Error(
-          'No subjects loaded for this college. Please wait for the page to finish loading, then try again.',
+          'No subjects are registered for your college.\n\nAsk your admin to add subjects (e.g. PHY, MATH, CHEM) in the college settings first.',
         );
       }
 
-      // Pre-load subjects to match codes (trimmed + uppercased on both sides)
-      const subjectMap = subjects.reduce((acc, sub) => {
+      // Build subject code → id map (trimmed + uppercased on both sides)
+      const subjectMap = currentSubjects.reduce((acc, sub) => {
         acc[sub.code.trim().toUpperCase()] = sub.id;
         return acc;
       }, {} as Record<string, string>);
@@ -283,7 +319,7 @@ const QuestionBuilder: React.FC = () => {
 
         questionsToInsert.push({
           college_id: user?.collegeId,
-          created_by: user?.facultyId,
+          created_by: user?.facultyId ?? null,
           subject_id: subId,
           type: 'mcq',
           question_text: questionText,
@@ -304,7 +340,7 @@ const QuestionBuilder: React.FC = () => {
 
         const skippedMsg =
           skippedCodes.size > 0
-            ? ` Skipped ${skippedCodes.size} rows — unrecognised codes: [${[...skippedCodes].join(', ')}].`
+            ? `\nSkipped ${skippedCodes.size} rows — unrecognised codes: [${[...skippedCodes].join(', ')}].`
             : '';
         setBulkReport(
           `✅ Successfully uploaded ${questionsToInsert.length} questions.${skippedMsg}`,
@@ -312,10 +348,10 @@ const QuestionBuilder: React.FC = () => {
         setFileSelected(null);
         loadData();
       } else {
-        // Give the teacher actionable diagnostic info
-        const missingCodes = [...skippedCodes].join(', ') || 'unknown';
+        // Actionable diagnostic: show what was in CSV vs what is registered
+        const csvCodes = [...skippedCodes].join(', ') || 'unknown';
         throw new Error(
-          `Zero questions imported.\n\nCodes found in your CSV: ${missingCodes}\nCodes registered in college: ${availableCodes}\n\nMake sure they match exactly (e.g. "PHY" not "Physics").`,
+          `Zero questions uploaded. Verify that the subject codes (e.g PHY, MATH, CHEM) exist in the college.\n\nCodes found in your CSV: [${csvCodes}]\nCodes registered in college: [${availableCodes}]\n\nMake sure they match exactly (e.g. "PHY" not "Physics"). Check that the admin has added these subjects under college settings.`,
         );
       }
     } catch (err: any) {
@@ -579,7 +615,13 @@ const QuestionBuilder: React.FC = () => {
               Select a CSV file matching the following headers:{"\n"}
               <Text style={styles.boldText}>Subject_Code,Question_Text,Option_A,Option_B,Option_C,Option_D,Correct_Answer,Marks,Difficulty</Text>{"\n"}
               {"\n"}
-              Ensure subject codes match subject codes in your college database (e.g. MATH, PHY, CHEM). Difficulty should be easy, medium, or hard.
+              Difficulty should be: easy, medium, or hard.{"\n"}
+              {"\n"}
+              <Text style={styles.boldText}>Registered subject codes for your college:{"\n"}
+              {subjects.length > 0
+                ? subjects.map(s => s.code).join(', ')
+                : 'Loading...'}
+              </Text>
             </Text>
 
             {/* File Picker Zone */}

@@ -315,6 +315,75 @@ const ExamInterface: React.FC = () => {
     );
   }, [questions, answers]);
 
+  // ── Compute and save results client-side (guaranteed fallback) ──
+  const computeAndSaveResults = useCallback(async () => {
+    try {
+      const {data: examQs} = await db.examQuestions()
+        .select('*, question:questions(correct_answer)')
+        .eq('exam_id', examId);
+
+      if (!examQs || examQs.length === 0) return;
+
+      const {data: studentAnswerRows} = await db.studentAnswers()
+        .select('question_id, selected_option')
+        .eq('session_id', sessionId);
+
+      const answerMap: Record<string, string | null> = {};
+      (studentAnswerRows || []).forEach((a: any) => {
+        answerMap[a.question_id] = a.selected_option;
+      });
+
+      let score = 0;
+      let correctCount = 0;
+      let wrongCount = 0;
+      let skippedCount = 0;
+      let maxScore = 0;
+
+      for (const eq of examQs) {
+        const marks = parseFloat(eq.marks) || 1;
+        const negMarks = parseFloat(eq.negative_marks) || 0;
+        maxScore += marks;
+        const selected = answerMap[eq.question_id];
+        const correct = (eq as any).question?.correct_answer;
+
+        if (!selected) {
+          skippedCount++;
+        } else if (selected === correct) {
+          score += marks;
+          correctCount++;
+        } else {
+          score = Math.max(0, score - negMarks);
+          wrongCount++;
+        }
+      }
+
+      const percentage = maxScore > 0 ? parseFloat(((score / maxScore) * 100).toFixed(2)) : 0;
+
+      await db.results().upsert(
+        {
+          college_id: user?.collegeId,
+          exam_id: examId,
+          student_id: user?.studentId,
+          session_id: sessionId,
+          score,
+          max_score: maxScore,
+          percentage,
+          rank: 0,
+          section_rank: 0,
+          correct_count: correctCount,
+          wrong_count: wrongCount,
+          skipped_count: skippedCount,
+          time_taken_seconds: Math.max(0, examQs.length * 60 - timeRemainingSeconds),
+          computed_at: new Date().toISOString(),
+          created_at: new Date().toISOString(),
+        },
+        {onConflict: 'exam_id,student_id'},
+      );
+    } catch (err) {
+      console.error('Client-side result computation failed:', err);
+    }
+  }, [examId, sessionId, user, timeRemainingSeconds]);
+
   const handleDisqualifySubmit = useCallback(async () => {
     try {
       if (autoSaveRef.current) clearInterval(autoSaveRef.current);
@@ -327,7 +396,6 @@ const ExamInterface: React.FC = () => {
         })
         .eq('id', sessionId);
 
-      // Log the disqualifying violation
       await db.violations().insert({
         college_id: user?.collegeId,
         session_id: sessionId,
@@ -340,20 +408,21 @@ const ExamInterface: React.FC = () => {
         created_at: new Date().toISOString(),
       });
 
-      // Trigger result computation via edge function
-      await supabase.functions.invoke('compute-results', {
-        body: {sessionId, examId},
-      }).catch(e => console.error('Edge function trigger error:', e));
+      // Compute results client-side FIRST (guaranteed — fixes zero-score)
+      await computeAndSaveResults();
+
+      // Best-effort edge function call (non-blocking)
+      supabase.functions.invoke('compute-results', {body: {sessionId, examId}})
+        .catch(e => console.warn('Edge fn (disqualify) non-fatal:', e));
 
       setSubmitted(true);
       navigation.replace('ExamResult', {sessionId, examId});
     } catch (err) {
       console.error('Disqualify submit error:', err);
-      // Fallback: still replace screen so they are locked out
       setSubmitted(true);
       navigation.replace('ExamResult', {sessionId, examId});
     }
-  }, [syncAnswers, sessionId, examId, user]);
+  }, [syncAnswers, sessionId, examId, user, computeAndSaveResults]);
 
   const handleAutoSubmit = useCallback(async () => {
     try {
@@ -367,17 +436,20 @@ const ExamInterface: React.FC = () => {
         })
         .eq('id', sessionId);
 
-      // Trigger result computation via edge function
-      await supabase.functions.invoke('compute-results', {
-        body: {sessionId, examId},
-      });
+      // Compute results client-side FIRST (guaranteed — fixes zero-score)
+      await computeAndSaveResults();
+
+      // Best-effort edge function call (non-blocking)
+      supabase.functions.invoke('compute-results', {body: {sessionId, examId}})
+        .catch(e => console.warn('Edge fn (submit) non-fatal:', e));
 
       setSubmitted(true);
       navigation.replace('ExamResult', {sessionId, examId});
     } catch {
       Alert.alert('Error', 'Failed to submit. Please try again.');
     }
-  }, [syncAnswers, sessionId, examId]);
+  }, [syncAnswers, sessionId, examId, computeAndSaveResults]);
+
 
   // ── Current question ──
   const currentQuestion = questions[currentIndex];

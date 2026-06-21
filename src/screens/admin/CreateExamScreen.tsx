@@ -3,7 +3,7 @@
 import React, {useState, useEffect} from 'react';
 import {
   StyleSheet, Text, TextInput,
-  TouchableOpacity, View, ScrollView, Alert, Switch, Modal, FlatList
+  TouchableOpacity, View, ScrollView, Alert, Switch, ActivityIndicator,
 } from 'react-native';
 import {SafeAreaView} from 'react-native-safe-area-context';
 import LinearGradient from 'react-native-linear-gradient';
@@ -18,6 +18,9 @@ import {useTranslation} from 'react-i18next';
 import type {AdminStackParamList} from '@apptypes/navigation.types';
 import {DatePickerModal, TimePickerModal} from '../../components/common/DateTimePicker';
 import {format, parseISO, isValid} from 'date-fns';
+import * as DocumentPicker from 'expo-document-picker';
+import * as FileSystem from 'expo-file-system/legacy';
+import {read, utils} from 'xlsx';
 
 type Nav = NativeStackNavigationProp<AdminStackParamList, 'CreateExam'>;
 
@@ -87,35 +90,12 @@ const CreateExamScreen: React.FC = () => {
   const [totalMarks, setTotalMarks] = useState('');
   const [totalQuestions, setTotalQuestions] = useState('');
 
-  // Questions upload states
+  // Questions file picker states
+  const [fileSelected, setFileSelected] = useState<{uri: string; name: string} | null>(null);
   const [questionsFile, setQuestionsFile] = useState<string | null>(null);
   const [parsedQuestions, setParsedQuestions] = useState<any[]>([]);
-
-  // Questions database selector states
-  const [dbQuestions, setDbQuestions] = useState<any[]>([]);
-  const [showQuestionModal, setShowQuestionModal] = useState(false);
-  const [selectedIds, setSelectedIds] = useState<string[]>([]);
-  
-  // CSV / Excel questions input states
-  const [questionSource, setQuestionSource] = useState<'bank' | 'csv'>('csv');
-  const [csvText, setCsvText] = useState('');
+  const [parsing, setParsing] = useState(false);
   const [subjects, setSubjects] = useState<any[]>([]);
-
-  useEffect(() => {
-    const fetchQuestions = async () => {
-      if (user?.collegeId) {
-        try {
-          const {data} = await db.questions()
-            .select('*, subject:subjects(name)')
-            .eq('college_id', user.collegeId);
-          if (data) setDbQuestions(data);
-        } catch (err) {
-          console.log('Error fetching questions:', err);
-        }
-      }
-    };
-    fetchQuestions();
-  }, [user?.collegeId]);
 
   useEffect(() => {
     const fetchSubjects = async () => {
@@ -134,23 +114,132 @@ const CreateExamScreen: React.FC = () => {
     fetchSubjects();
   }, [user?.collegeId]);
 
-  const openQuestionSelector = () => {
-    if (dbQuestions.length === 0) {
-      Alert.alert('No Questions Found', 'Please add questions to the database question bank first.');
-      return;
+  // ── File Picker ──
+  const handlePickFile = async () => {
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: [
+          'text/csv',
+          'text/comma-separated-values',
+          'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          'application/vnd.ms-excel',
+        ],
+        copyToCacheDirectory: true,
+      });
+      if (!result.canceled && result.assets && result.assets.length > 0) {
+        const asset = result.assets[0];
+        setFileSelected({uri: asset.uri, name: asset.name});
+        setParsedQuestions([]);
+        setQuestionsFile(null);
+        setTotalQuestions('');
+        setTotalMarks('');
+      }
+    } catch (err: any) {
+      Alert.alert('Error', 'Failed to pick file: ' + err.message);
     }
-    setShowQuestionModal(true);
   };
 
-  const handleConfirmQuestions = (ids: string[]) => {
-    setSelectedIds(ids);
-    const selected = dbQuestions.filter(q => ids.includes(q.id));
-    setTotalQuestions(selected.length.toString());
-    const sumMarks = selected.reduce((sum, q) => sum + (parseFloat(q.marks) || 0), 0);
-    setTotalMarks(sumMarks.toString());
-    setQuestionsFile(`Selected ${selected.length} questions from bank`);
-    setParsedQuestions(selected);
-    setShowQuestionModal(false);
+  // ── Parse picked file (CSV or Excel) ──
+  const handleParseFile = async () => {
+    if (!fileSelected) return;
+    setParsing(true);
+    try {
+      const isExcel = fileSelected.name.endsWith('.xlsx') || fileSelected.name.endsWith('.xls');
+      let rows: string[][] = [];
+
+      if (isExcel) {
+        const b64 = await FileSystem.readAsStringAsync(fileSelected.uri, {
+          encoding: FileSystem.EncodingType.Base64,
+        });
+        const workbook = read(b64, {type: 'base64'});
+        const sheet = workbook.Sheets[workbook.SheetNames[0]];
+        const rawRows = utils.sheet_to_json(sheet, {header: 1}) as any[][];
+        // Skip header row, convert to string[][]
+        rows = rawRows.slice(1).map(r => r.map(c => String(c ?? '').trim()));
+      } else {
+        const content = await FileSystem.readAsStringAsync(fileSelected.uri, {
+          encoding: FileSystem.EncodingType.UTF8,
+        });
+        rows = parseCSV(content);
+      }
+
+      if (rows.length === 0) {
+        throw new Error('No data rows found. Check your file format.');
+      }
+
+      // Safety: fetch subjects if not loaded yet
+      let currentSubjects = subjects;
+      if (currentSubjects.length === 0 && user?.collegeId) {
+        const {data} = await db.subjects().select('*').eq('college_id', user.collegeId).eq('is_active', true);
+        if (data) {
+          currentSubjects = data;
+          setSubjects(data);
+        }
+      }
+
+      if (currentSubjects.length === 0) {
+        throw new Error('No subjects registered for your college. Ask admin to add subjects first.');
+      }
+
+      const subjectMap = currentSubjects.reduce((acc, sub) => {
+        acc[sub.code.trim().toUpperCase()] = sub.id;
+        return acc;
+      }, {} as Record<string, string>);
+
+      const availableCodes = Object.keys(subjectMap).join(', ');
+      const questionsToParse: any[] = [];
+      const skippedCodes = new Set<string>();
+
+      for (const row of rows) {
+        if (row.length < 8) continue;
+        const subjectCode = row[0].trim().toUpperCase();
+        const subId = subjectMap[subjectCode];
+        if (!subId) {
+          skippedCodes.add(subjectCode);
+          continue;
+        }
+        const questionText = row[1]?.trim();
+        const correctAns = row[6]?.trim().toUpperCase();
+        if (!questionText || !correctAns) continue;
+
+        questionsToParse.push({
+          college_id: user?.collegeId,
+          created_by: null,
+          subject_id: subId,
+          type: 'mcq',
+          question_text: questionText,
+          option_a: row[2]?.trim(),
+          option_b: row[3]?.trim(),
+          option_c: row[4]?.trim(),
+          option_d: row[5]?.trim(),
+          correct_answer: correctAns,
+          marks: parseFloat(row[7]) || 1.0,
+          negative_marks: negativeMarking ? 0.25 : 0.0,
+          difficulty: (row[8]?.trim().toLowerCase() || 'medium') as 'easy' | 'medium' | 'hard',
+        });
+      }
+
+      if (questionsToParse.length > 0) {
+        setParsedQuestions(questionsToParse);
+        setTotalQuestions(questionsToParse.length.toString());
+        const sumMarks = questionsToParse.reduce((s, q) => s + q.marks, 0);
+        setTotalMarks(sumMarks.toString());
+        setQuestionsFile(`📄 ${fileSelected.name} — ${questionsToParse.length} questions`);
+        const skippedMsg = skippedCodes.size > 0
+          ? `\nSkipped ${skippedCodes.size} rows — unrecognised codes: [${[...skippedCodes].join(', ')}].`
+          : '';
+        Alert.alert('✅ Parsed', `${questionsToParse.length} questions ready.${skippedMsg}`);
+      } else {
+        const csvCodes = [...skippedCodes].join(', ') || 'unknown';
+        throw new Error(
+          `Zero questions matched.\n\nCodes in your file: [${csvCodes}]\nCodes registered: [${availableCodes}]\n\nMake sure they match exactly (e.g. "PHYS101" not "PHY").`
+        );
+      }
+    } catch (err: any) {
+      Alert.alert('Parse Failed', err.message || 'Error processing file.');
+    } finally {
+      setParsing(false);
+    }
   };
 
   // Simple CSV parser
@@ -195,20 +284,26 @@ const CreateExamScreen: React.FC = () => {
         throw new Error('No valid rows found. Check your columns.');
       }
 
+      if (subjects.length === 0) {
+        throw new Error('Subjects are still loading. Please wait a moment and try again.');
+      }
+
+      // Trim + uppercase on both sides to avoid whitespace mismatches
       const subjectMap = subjects.reduce((acc, sub) => {
-        acc[sub.code.toUpperCase()] = sub.id;
+        acc[sub.code.trim().toUpperCase()] = sub.id;
         return acc;
       }, {} as Record<string, string>);
 
+      const availableCodes = Object.keys(subjectMap).join(', ');
       const questionsToParse: any[] = [];
-      let skippedCount = 0;
+      const skippedCodes = new Set<string>();
 
       for (let i = 0; i < rows.length; i++) {
         const row = rows[i];
-        const subjectCode = row[0].toUpperCase();
+        const subjectCode = row[0].trim().toUpperCase(); // ← trim() prevents whitespace mismatches
         const subId = subjectMap[subjectCode];
         if (!subId) {
-          skippedCount++;
+          skippedCodes.add(subjectCode);
           continue;
         }
 
@@ -217,15 +312,15 @@ const CreateExamScreen: React.FC = () => {
           created_by: null, // Admin created
           subject_id: subId,
           type: 'mcq',
-          question_text: row[1],
-          option_a: row[2],
-          option_b: row[3],
-          option_c: row[4],
-          option_d: row[5],
-          correct_answer: row[6].toUpperCase(),
+          question_text: row[1]?.trim(),
+          option_a: row[2]?.trim(),
+          option_b: row[3]?.trim(),
+          option_c: row[4]?.trim(),
+          option_d: row[5]?.trim(),
+          correct_answer: row[6]?.trim().toUpperCase(),
           marks: parseFloat(row[7]) || 1.0,
           negative_marks: negativeMarking ? 0.25 : 0.0,
-          difficulty: (row[8]?.toLowerCase() || 'medium') as 'easy' | 'medium' | 'hard',
+          difficulty: (row[8]?.trim().toLowerCase() || 'medium') as 'easy' | 'medium' | 'hard',
         });
       }
 
@@ -235,13 +330,16 @@ const CreateExamScreen: React.FC = () => {
         const sumMarks = questionsToParse.reduce((sum, q) => sum + q.marks, 0);
         setTotalMarks(sumMarks.toString());
         setQuestionsFile(`CSV: ${questionsToParse.length} questions parsed successfully`);
-        if (skippedCount > 0) {
-          Alert.alert('Success', `Parsed ${questionsToParse.length} questions. Skipped ${skippedCount} rows with unmatched subject codes.`);
+        if (skippedCodes.size > 0) {
+          Alert.alert('Success', `Parsed ${questionsToParse.length} questions. Skipped ${skippedCodes.size} rows — unrecognised codes: [${[...skippedCodes].join(', ')}].`);
         } else {
           Alert.alert('Success', `Parsed ${questionsToParse.length} questions from CSV successfully.`);
         }
       } else {
-        throw new Error('No questions could be matched. Verify subject codes (e.g. PHY, MATH) exist in the system.');
+        const csvCodes = [...skippedCodes].join(', ') || 'unknown';
+        throw new Error(
+          `Zero questions uploaded. Verify that the subject codes (e.g PHY, MATH, CHEM) exist in the college.\n\nCodes found in your CSV: [${csvCodes}]\nCodes registered in college: [${availableCodes}]\n\nMake sure they match exactly (e.g. "PHY" not "Physics").`
+        );
       }
     } catch (err: any) {
       Alert.alert('Parse Failed', err.message || 'Error processing CSV.');
@@ -508,103 +606,77 @@ const CreateExamScreen: React.FC = () => {
           </View>
         </View>
 
-        {/* Question Source Tabs */}
+        {/* Questions File Upload */}
         <View style={styles.formGroup}>
-          <Text style={styles.label}>Questions Source *</Text>
-          <View style={styles.selectors}>
-            <TouchableOpacity
-              style={[styles.selectorCell, questionSource === 'csv' && styles.selectorSelected]}
-              onPress={() => {
-                setQuestionSource('csv');
-                setParsedQuestions([]);
-                setTotalQuestions('');
-                setTotalMarks('');
-                setQuestionsFile(null);
-              }}>
-              <Text style={[styles.selectorText, questionSource === 'csv' && styles.selectorTextSelected]}>
-                📤 Upload CSV (Excel)
-              </Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.selectorCell, questionSource === 'bank' && styles.selectorSelected]}
-              onPress={() => {
-                setQuestionSource('bank');
-                setParsedQuestions([]);
-                setTotalQuestions('');
-                setTotalMarks('');
-                setQuestionsFile(null);
-              }}>
-              <Text style={[styles.selectorText, questionSource === 'bank' && styles.selectorTextSelected]}>
-                📁 Select from Bank
-              </Text>
-            </TouchableOpacity>
-          </View>
-        </View>
+          <Text style={styles.label}>Questions — Upload CSV / Excel *</Text>
+          <Text style={styles.guidelineText}>
+            Format: Subject_Code, Question_Text, Option_A, Option_B, Option_C, Option_D, Correct_Answer, Marks, Difficulty{"\n"}
+            Registered codes: <Text style={styles.boldText}>{subjects.length > 0 ? subjects.map(s => s.code).join(', ') : 'Loading...'}</Text>
+          </Text>
 
-        {questionSource === 'csv' ? (
-          <View style={styles.csvUploadBox}>
-            <Text style={styles.guidelineText}>
-              Copy columns from your Excel sheet and paste as CSV here. Column format:{"\n"}
-              <Text style={styles.boldText}>Subject_Code, Question_Text, Option_A, Option_B, Option_C, Option_D, Correct_Answer, Marks, Difficulty</Text>
+          {/* File picker zone */}
+          <TouchableOpacity
+            onPress={handlePickFile}
+            style={[
+              styles.uploadZone,
+              fileSelected && !questionsFile ? styles.uploadZonePending : null,
+              questionsFile ? styles.uploadZoneDone : null,
+            ]}
+            activeOpacity={0.8}>
+            <Text style={styles.uploadZoneIcon}>{questionsFile ? '✅' : fileSelected ? '📋' : '📂'}</Text>
+            <Text style={styles.uploadZoneTitle}>
+              {questionsFile
+                ? questionsFile
+                : fileSelected
+                ? fileSelected.name
+                : 'Tap to select CSV or Excel file'}
             </Text>
-            <TextInput
-              style={[styles.input, styles.csvTextArea]}
-              value={csvText}
-              onChangeText={setCsvText}
-              placeholder="PHY,What is the value of gravity?,9.8,10,12,0,A,1,easy"
-              placeholderTextColor={Colors.textMuted}
-              multiline
-              numberOfLines={6}
-            />
-            <TouchableOpacity style={styles.parseBtn} onPress={handleParseQuestionsCSV}>
-              <Text style={styles.parseBtnText}>Parse & Validate CSV</Text>
-            </TouchableOpacity>
-            
-            {parsedQuestions.length > 0 && (
-              <View style={styles.parsedSummary}>
-                <Text style={styles.parsedSummaryText}>
-                  ✅ Successfully parsed {parsedQuestions.length} questions!
-                </Text>
-                <ScrollView style={styles.parsedPreviewList} nestedScrollEnabled={true}>
-                  {parsedQuestions.slice(0, 5).map((q, idx) => (
-                    <View key={idx} style={styles.parsedPreviewItem}>
-                      <Text style={styles.parsedPreviewText} numberOfLines={1}>
-                        Q{idx+1}: {q.question_text}
-                      </Text>
-                    </View>
-                  ))}
-                  {parsedQuestions.length > 5 && (
-                    <Text style={styles.moreQuestionsText}>
-                      + {parsedQuestions.length - 5} more questions...
-                    </Text>
-                  )}
-                </ScrollView>
-              </View>
-            )}
-          </View>
-        ) : (
-          <View style={styles.formGroup}>
+            <Text style={styles.uploadZoneSub}>
+              {questionsFile
+                ? `${parsedQuestions.length} questions ready`
+                : 'Supports .csv, .xls, .xlsx'}
+            </Text>
+          </TouchableOpacity>
+
+          {/* Parse button (shown after file selected, before parsed) */}
+          {fileSelected && !questionsFile && (
             <TouchableOpacity
-              style={[
-                styles.uploadContainer,
-                questionsFile ? styles.uploadSuccessBorder : null
-              ]}
-              onPress={openQuestionSelector}
-              activeOpacity={0.8}>
-              <Text style={styles.uploadBtnIcon}>{questionsFile ? '✅' : '📁'}</Text>
-              <View style={{flex: 1, marginLeft: Spacing.sm}}>
-                <Text style={styles.uploadTitle}>
-                  {questionsFile ? questionsFile : 'Choose from Question Bank'}
-                </Text>
-                <Text style={styles.uploadSubtitle}>
-                  {questionsFile
-                    ? `${totalQuestions || '0'} questions ready to be linked`
-                    : 'Click to select questions from bank'}
-                </Text>
-              </View>
+              onPress={handleParseFile}
+              disabled={parsing}
+              style={styles.parseBtn}>
+              {parsing
+                ? <ActivityIndicator size="small" color={Colors.white} />
+                : <Text style={styles.parseBtnText}>⚙ Parse & Validate File</Text>}
             </TouchableOpacity>
-          </View>
-        )}
+          )}
+
+          {/* Parsed questions preview */}
+          {parsedQuestions.length > 0 && (
+            <View style={styles.parsedSummary}>
+              <Text style={styles.parsedSummaryText}>
+                ✅ {parsedQuestions.length} questions ready to import
+              </Text>
+              <ScrollView style={styles.parsedPreviewList} nestedScrollEnabled={true}>
+                {parsedQuestions.slice(0, 5).map((q, idx) => (
+                  <View key={idx} style={styles.parsedPreviewItem}>
+                    <Text style={styles.parsedPreviewText} numberOfLines={1}>
+                      Q{idx + 1}: {q.question_text}
+                    </Text>
+                  </View>
+                ))}
+                {parsedQuestions.length > 5 && (
+                  <Text style={styles.moreQuestionsText}>
+                    + {parsedQuestions.length - 5} more questions...
+                  </Text>
+                )}
+              </ScrollView>
+              {/* Re-pick button */}
+              <TouchableOpacity onPress={() => { setFileSelected(null); setParsedQuestions([]); setQuestionsFile(null); setTotalQuestions(''); setTotalMarks(''); }} style={styles.reparseBtn}>
+                <Text style={styles.reparseBtnText}>↩ Choose Different File</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+        </View>
 
         <Text style={styles.sectionTitle}>Exam Settings</Text>
 
@@ -678,57 +750,6 @@ const CreateExamScreen: React.FC = () => {
         onSelect={setEndTime}
         title="Select End Time"
       />
-
-      {/* Select Questions Modal */}
-      <Modal
-        visible={showQuestionModal}
-        transparent
-        animationType="slide"
-        onRequestClose={() => setShowQuestionModal(false)}>
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Select Questions</Text>
-              <TouchableOpacity onPress={() => setShowQuestionModal(false)}>
-                <Text style={styles.modalCloseText}>✕</Text>
-              </TouchableOpacity>
-            </View>
-            <FlatList
-              data={dbQuestions}
-              keyExtractor={item => item.id}
-              contentContainerStyle={styles.modalList}
-              renderItem={({item}) => {
-                const isSelected = selectedIds.includes(item.id);
-                return (
-                  <TouchableOpacity
-                    style={[styles.modalItem, isSelected && styles.modalItemActive]}
-                    onPress={() => {
-                      setSelectedIds(prev =>
-                        prev.includes(item.id)
-                          ? prev.filter(id => id !== item.id)
-                          : [...prev, item.id]
-                      );
-                    }}
-                    activeOpacity={0.8}>
-                    <View style={styles.modalItemHeader}>
-                      <Text style={styles.modalItemSubject}>{item.subject?.name}</Text>
-                      <Text style={styles.modalItemMarks}>+{item.marks} M</Text>
-                    </View>
-                    <Text style={styles.modalItemText} numberOfLines={2}>{item.question_text}</Text>
-                  </TouchableOpacity>
-                );
-              }}
-            />
-            <TouchableOpacity
-              style={styles.modalConfirmBtn}
-              onPress={() => handleConfirmQuestions(selectedIds)}>
-              <LinearGradient colors={Colors.gradients.primaryBlue} style={styles.saveBtnGradient}>
-                <Text style={styles.saveBtnText}>Confirm Selection ({selectedIds.length})</Text>
-              </LinearGradient>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
     </SafeAreaView>
   );
 };
@@ -781,107 +802,39 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.surfaceVariant,
     borderColor: Colors.borderLight,
   },
-  uploadContainer: {
-    height: 64,
+  uploadZone: {
     backgroundColor: Colors.surface,
-    borderRadius: BorderRadius.lg,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    paddingHorizontal: Spacing.base,
-    flexDirection: 'row',
-    alignItems: 'center',
+    minHeight: 120,
+    borderRadius: BorderRadius.xl,
     borderStyle: 'dashed',
-  },
-  uploadSuccessBorder: {
-    borderColor: Colors.success,
-    backgroundColor: Colors.successSurface,
-  },
-  uploadBtnIcon: {
-    fontSize: 24,
-  },
-  uploadTitle: {
-    fontFamily: FontFamily.bold,
-    fontSize: FontSize.sm,
-    color: Colors.textPrimary,
-  },
-  uploadSubtitle: {
-    fontFamily: FontFamily.medium,
-    fontSize: FontSize.xs,
-    color: Colors.textSecondary,
-    marginTop: 2,
-  },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: Colors.overlay,
-    justifyContent: 'flex-end',
-  },
-  modalContent: {
-    backgroundColor: Colors.surface,
-    borderTopLeftRadius: BorderRadius.xl,
-    borderTopRightRadius: BorderRadius.xl,
-    height: '80%',
-    padding: Spacing.base,
-    ...Shadow.lg,
-  },
-  modalHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
+    borderWidth: 2,
+    borderColor: Colors.borderDark,
     alignItems: 'center',
-    marginBottom: Spacing.md,
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.borderLight,
-    paddingBottom: Spacing.sm,
-  },
-  modalTitle: {
-    fontFamily: FontFamily.bold,
-    fontSize: FontSize.lg,
-    color: Colors.textPrimary,
-  },
-  modalCloseText: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    color: Colors.textSecondary,
-  },
-  modalList: {
-    paddingBottom: Spacing.base,
-  },
-  modalItem: {
-    backgroundColor: Colors.background,
-    borderRadius: BorderRadius.lg,
-    padding: Spacing.md,
+    justifyContent: 'center',
+    padding: Spacing.base,
     marginBottom: Spacing.sm,
-    borderWidth: 1.5,
-    borderColor: Colors.border,
+    ...Shadow.sm,
   },
-  modalItemActive: {
+  uploadZonePending: {
     borderColor: Colors.primary,
     backgroundColor: Colors.primarySurface,
   },
-  modalItemHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: 4,
+  uploadZoneDone: {
+    borderColor: Colors.success,
+    backgroundColor: Colors.successSurface,
   },
-  modalItemSubject: {
-    fontFamily: FontFamily.bold,
-    fontSize: FontSize.xs,
-    color: Colors.primary,
-  },
-  modalItemMarks: {
-    fontFamily: FontFamily.bold,
-    fontSize: FontSize.xs,
-    color: Colors.success,
-  },
-  modalItemText: {
-    fontFamily: FontFamily.medium,
+  uploadZoneIcon: {fontSize: 36, marginBottom: 6},
+  uploadZoneTitle: {
+    fontFamily: FontFamily.semiBold,
     fontSize: FontSize.sm,
     color: Colors.textPrimary,
+    textAlign: 'center',
   },
-  modalConfirmBtn: {
-    borderRadius: BorderRadius.lg,
-    overflow: 'hidden',
-    marginTop: Spacing.sm,
-    marginBottom: Spacing.base,
+  uploadZoneSub: {
+    fontFamily: FontFamily.regular,
+    fontSize: FontSize.xs,
+    color: Colors.textTertiary,
+    marginTop: 3,
   },
   csvUploadBox: {
     backgroundColor: Colors.surface,
@@ -902,18 +855,10 @@ const styles = StyleSheet.create({
     lineHeight: 18,
     marginBottom: Spacing.sm,
   },
-  csvTextArea: {
-    height: 120,
-    paddingVertical: 10,
-    textAlignVertical: 'top',
-    fontFamily: 'monospace',
-    fontSize: FontSize.xs,
-    marginBottom: Spacing.sm,
-  },
   parseBtn: {
-    height: 40,
+    height: 44,
     backgroundColor: Colors.secondary,
-    borderRadius: BorderRadius.md,
+    borderRadius: BorderRadius.lg,
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: Spacing.sm,
@@ -927,18 +872,18 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.successSurface,
     borderColor: Colors.successBorder,
     borderWidth: 1,
-    borderRadius: BorderRadius.md,
+    borderRadius: BorderRadius.lg,
     padding: Spacing.sm,
     marginTop: Spacing.xs,
   },
   parsedSummaryText: {
     fontFamily: FontFamily.bold,
-    fontSize: FontSize.xs,
+    fontSize: FontSize.sm,
     color: Colors.successDark,
     marginBottom: 4,
   },
   parsedPreviewList: {
-    maxHeight: 100,
+    maxHeight: 110,
   },
   parsedPreviewItem: {
     paddingVertical: 4,
@@ -956,6 +901,16 @@ const styles = StyleSheet.create({
     color: Colors.textMuted,
     marginTop: 4,
     textAlign: 'center',
+  },
+  reparseBtn: {
+    marginTop: Spacing.sm,
+    alignItems: 'center',
+  },
+  reparseBtnText: {
+    fontFamily: FontFamily.semiBold,
+    fontSize: FontSize.xs,
+    color: Colors.primary,
+    textDecorationLine: 'underline',
   },
 });
 

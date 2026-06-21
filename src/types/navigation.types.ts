@@ -18,8 +18,7 @@ export type RootStackParamList = {
 // Admin Navigation
 export type AdminTabParamList = {
   Dashboard: undefined;
-  Students: undefined;
-  Faculty: undefined;
+  Users: undefined;
   Calendar: undefined;
   Reports: undefined;
 };
@@ -33,6 +32,7 @@ export type AdminStackParamList = {
   StudentDetail: {studentId: string};
   FacultyDetail: {facultyId: string};
   BulkUpload: undefined;
+  UserManagement: undefined;
   ReportDetail: {reportType: string; examId?: string};
   Profile: undefined;
 };
