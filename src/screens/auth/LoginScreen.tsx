@@ -102,7 +102,12 @@ const LoginScreen: React.FC = () => {
         return;
       }
 
-      navigation.navigate('OTP', {mobile, role, rollNumber: rollNumber || undefined});
+      navigation.navigate('OTP', {
+        mobile,
+        role,
+        rollNumber: rollNumber || undefined,
+        otpHint: response.data?.message,
+      });
     } catch {
       Toast.show({type: 'error', text1: 'Error', text2: t('common.networkError')});
     } finally {

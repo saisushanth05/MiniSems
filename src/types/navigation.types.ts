@@ -8,6 +8,7 @@ export type RootStackParamList = {
     mobile: string;
     role: 'admin' | 'faculty' | 'student' | 'parent';
     rollNumber?: string;
+    otpHint?: string;
   };
   AdminRoot: undefined;
   FacultyRoot: undefined;

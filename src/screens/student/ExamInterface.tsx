@@ -318,20 +318,11 @@ const ExamInterface: React.FC = () => {
   // ── Compute and save results client-side (guaranteed fallback) ──
   const computeAndSaveResults = useCallback(async () => {
     try {
-      const {data: examQs} = await db.examQuestions()
-        .select('*, question:questions(correct_answer)')
-        .eq('exam_id', examId);
+      const state = useExamStore.getState();
+      const currentQuestions = state.questions;
+      const currentAnswers = state.answers;
 
-      if (!examQs || examQs.length === 0) return;
-
-      const {data: studentAnswerRows} = await db.studentAnswers()
-        .select('question_id, selected_option')
-        .eq('session_id', sessionId);
-
-      const answerMap: Record<string, string | null> = {};
-      (studentAnswerRows || []).forEach((a: any) => {
-        answerMap[a.question_id] = a.selected_option;
-      });
+      if (!currentQuestions || currentQuestions.length === 0) return;
 
       let score = 0;
       let correctCount = 0;
@@ -339,12 +330,12 @@ const ExamInterface: React.FC = () => {
       let skippedCount = 0;
       let maxScore = 0;
 
-      for (const eq of examQs) {
-        const marks = parseFloat(eq.marks) || 1;
-        const negMarks = parseFloat(eq.negative_marks) || 0;
+      for (const q of currentQuestions) {
+        const marks = parseFloat(String(q.marks)) || 1;
+        const negMarks = parseFloat(String(q.negativeMarks)) || 0;
         maxScore += marks;
-        const selected = answerMap[eq.question_id];
-        const correct = (eq as any).question?.correct_answer;
+        const selected = currentAnswers[q.id]?.selectedOption;
+        const correct = q.correct_answer;
 
         if (!selected) {
           skippedCount++;
@@ -373,7 +364,7 @@ const ExamInterface: React.FC = () => {
           correct_count: correctCount,
           wrong_count: wrongCount,
           skipped_count: skippedCount,
-          time_taken_seconds: Math.max(0, examQs.length * 60 - timeRemainingSeconds),
+          time_taken_seconds: Math.max(0, currentQuestions.length * 60 - timeRemainingSeconds),
           computed_at: new Date().toISOString(),
           created_at: new Date().toISOString(),
         },

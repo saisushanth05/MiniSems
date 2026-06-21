@@ -1,0 +1,8 @@
+Type,Name,Mobile,Roll_Number,Parent_Mobile,Stream,Year,Email,Qualification
+student,Ravi Kumar,9876543210,ROLL001,9123456789,MPC,1,,
+student,Priya Sharma,9876543211,ROLL002,9123456780,BiPC,2,,
+student,Arjun Reddy,9876543214,ROLL003,9123456781,MEC,1,,
+student,Sonia Gupta,9876543215,ROLL004,9123456782,CEC,2,,
+student,Kiran Babu,9876543216,ROLL005,9123456783,HEC,1,,
+faculty,Dr. Anitha Rao,9876543212,,,,,anitha@college.edu,M.Sc B.Ed
+faculty,Suresh Babu,9876543213,,,,,,M.Tech

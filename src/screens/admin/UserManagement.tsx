@@ -1,475 +1,589 @@
 // Mini Sems — User Management Screen (Admin)
-// Create student & faculty accounts so they can log in with OTP
+// Bulk-upload students & faculty via a single CSV / Excel file
+// CSV format: Type, Name, Mobile, Roll_Number, Parent_Mobile, Stream, Year, Email, Qualification
 
-import React, {useState, useEffect, useCallback} from 'react';
+import React, {useState} from 'react';
 import {
   Alert,
-  FlatList,
-  KeyboardAvoidingView,
-  Platform,
   ScrollView,
   StyleSheet,
   Text,
-  TextInput,
   TouchableOpacity,
   View,
-  Modal,
   ActivityIndicator,
 } from 'react-native';
 import {SafeAreaView} from 'react-native-safe-area-context';
 import LinearGradient from 'react-native-linear-gradient';
+import {useNavigation} from '@react-navigation/native';
 import {Colors} from '@theme/colors';
 import {FontFamily, FontSize} from '@theme/typography';
 import {BorderRadius, Shadow, Spacing} from '@theme/spacing';
 import {useAuthStore} from '@stores/authStore';
 import {db} from '@services/supabase';
+import * as DocumentPicker from 'expo-document-picker';
+import * as FileSystem from 'expo-file-system/legacy';
+import {read, utils} from 'xlsx';
 import Toast from 'react-native-toast-message';
 
-type Tab = 'students' | 'faculty';
+type ParsedUser =
+  | {
+      type: 'student';
+      name: string;
+      mobile: string;
+      rollNumber: string;
+      parentMobile: string;
+      stream: string;
+      year: number;
+    }
+  | {
+      type: 'faculty';
+      name: string;
+      mobile: string;
+      email: string;
+      qualification: string;
+    };
 
-const STREAMS = ['MPC', 'BiPC', 'MEC', 'CEC', 'HEC'] as const;
-const YEARS = [1, 2] as const;
+const VALID_STREAMS = ['MPC', 'BIPC', 'MEC', 'CEC', 'HEC'];
+
+const CSV_TEMPLATE = `Type,Name,Mobile,Roll_Number,Parent_Mobile,Stream,Year,Email,Qualification
+student,Ravi Kumar,9876543210,ROLL001,9123456789,MPC,1,,
+student,Priya Sharma,9876543211,ROLL002,9123456780,BiPC,2,,
+faculty,Dr. Anitha Rao,9876543212,,,,,anitha@college.edu,M.Sc B.Ed
+faculty,Suresh Babu,9876543213,,,,,,M.Tech`;
 
 const UserManagement: React.FC = () => {
+  const navigation = useNavigation();
   const {user} = useAuthStore();
-  const [activeTab, setActiveTab] = useState<Tab>('students');
-  const [students, setStudents] = useState<any[]>([]);
-  const [faculty, setFaculty] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [showModal, setShowModal] = useState(false);
-  const [saving, setSaving] = useState(false);
 
-  // Student form fields
-  const [stdName, setStdName] = useState('');
-  const [stdRoll, setStdRoll] = useState('');
-  const [stdMobile, setStdMobile] = useState('');
-  const [stdStream, setStdStream] = useState<string>('MPC');
-  const [stdYear, setStdYear] = useState<number>(1);
-  const [stdParentMobile, setStdParentMobile] = useState('');
+  const [fileSelected, setFileSelected] = useState<{uri: string; name: string} | null>(null);
+  const [validating, setValidating] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const [parsedUsers, setParsedUsers] = useState<ParsedUser[]>([]);
+  const [errors, setErrors] = useState<string[]>([]);
+  const [validated, setValidated] = useState(false);
 
-  // Faculty form fields
-  const [facName, setFacName] = useState('');
-  const [facMobile, setFacMobile] = useState('');
-  const [facEmail, setFacEmail] = useState('');
-  const [facQualification, setFacQualification] = useState('');
+  const studentCount = parsedUsers.filter(u => u.type === 'student').length;
+  const facultyCount = parsedUsers.filter(u => u.type === 'faculty').length;
 
-  const collegeId = user?.collegeId;
-
-  const loadData = useCallback(async () => {
-    if (!collegeId) return;
-    setLoading(true);
+  const handleSelectFile = async () => {
     try {
-      const [stdRes, facRes] = await Promise.all([
-        db.students()
-          .select('id, name, roll_number, mobile, stream, year, status, created_at')
-          .eq('college_id', collegeId)
-          .order('created_at', {ascending: false}),
-        db.faculty()
-          .select('id, name, mobile, email, qualification, is_active, created_at')
-          .eq('college_id', collegeId)
-          .order('created_at', {ascending: false}),
-      ]);
-      setStudents(stdRes.data || []);
-      setFaculty(facRes.data || []);
-    } catch {
-      Toast.show({type: 'error', text1: 'Failed to load users'});
-    } finally {
-      setLoading(false);
-    }
-  }, [collegeId]);
-
-  useEffect(() => {
-    loadData();
-  }, [loadData]);
-
-  const resetForm = () => {
-    setStdName(''); setStdRoll(''); setStdMobile(''); setStdStream('MPC');
-    setStdYear(1); setStdParentMobile('');
-    setFacName(''); setFacMobile(''); setFacEmail(''); setFacQualification('');
-  };
-
-  const validatePhone = (phone: string) => /^\d{10}$/.test(phone);
-
-  const handleCreateStudent = async () => {
-    if (!stdName.trim() || !stdRoll.trim() || !stdMobile.trim() || !stdParentMobile.trim()) {
-      Alert.alert('Missing Fields', 'Please fill all required fields.');
-      return;
-    }
-    if (!validatePhone(stdMobile)) {
-      Alert.alert('Invalid Mobile', 'Student mobile must be 10 digits.');
-      return;
-    }
-    if (!validatePhone(stdParentMobile)) {
-      Alert.alert('Invalid Mobile', 'Parent mobile must be 10 digits.');
-      return;
-    }
-    setSaving(true);
-    try {
-      // 1. Create user account (mobile is login credential)
-      const {data: userRow, error: userErr} = await db.users().insert({
-        college_id: collegeId,
-        role: 'student',
-        mobile: `+91${stdMobile}`,
-        is_active: true,
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      }).select().single();
-
-      if (userErr) throw new Error(userErr.message);
-
-      // 2. Create student record
-      const {error: stdErr} = await db.students().insert({
-        college_id: collegeId,
-        user_id: userRow.id,
-        roll_number: stdRoll.trim().toUpperCase(),
-        name: stdName.trim(),
-        mobile: `+91${stdMobile}`,
-        parent_mobile: `+91${stdParentMobile}`,
-        stream: stdStream,
-        year: stdYear,
-        status: 'active',
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
+      const result = await DocumentPicker.getDocumentAsync({
+        type: [
+          'text/csv',
+          'text/comma-separated-values',
+          'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          'application/vnd.ms-excel',
+        ],
+        copyToCacheDirectory: true,
       });
-
-      if (stdErr) throw new Error(stdErr.message);
-
-      Toast.show({type: 'success', text1: '✅ Student Created', text2: `${stdName} can now log in with +91${stdMobile}`});
-      resetForm();
-      setShowModal(false);
-      loadData();
+      if (!result.canceled && result.assets && result.assets.length > 0) {
+        const asset = result.assets[0];
+        setFileSelected({uri: asset.uri, name: asset.name});
+        setParsedUsers([]);
+        setErrors([]);
+        setValidated(false);
+      }
     } catch (err: any) {
-      Alert.alert('Error', err.message || 'Failed to create student');
-    } finally {
-      setSaving(false);
+      Alert.alert('Error', 'Failed to pick file: ' + err.message);
     }
   };
 
-  const handleCreateFaculty = async () => {
-    if (!facName.trim() || !facMobile.trim()) {
-      Alert.alert('Missing Fields', 'Name and mobile are required.');
-      return;
-    }
-    if (!validatePhone(facMobile)) {
-      Alert.alert('Invalid Mobile', 'Faculty mobile must be 10 digits.');
-      return;
-    }
-    setSaving(true);
+  const parseCSVText = (text: string): string[][] => {
+    const lines = text
+      .split(/\r?\n/)
+      .map(l => l.trim())
+      .filter(l => l.length > 0);
+    return lines.map(line => {
+      const cols: string[] = [];
+      let cur = '';
+      let inQ = false;
+      for (const ch of line) {
+        if (ch === '"') { inQ = !inQ; continue; }
+        if (ch === ',' && !inQ) { cols.push(cur.trim()); cur = ''; continue; }
+        cur += ch;
+      }
+      cols.push(cur.trim());
+      return cols;
+    });
+  };
+
+  const handleValidate = async () => {
+    if (!fileSelected) return;
+    setValidating(true);
+    setParsedUsers([]);
+    setErrors([]);
+    setValidated(false);
     try {
-      // 1. Create user account
-      const {data: userRow, error: userErr} = await db.users().insert({
-        college_id: collegeId,
-        role: 'faculty',
-        mobile: `+91${facMobile}`,
-        is_active: true,
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      }).select().single();
+      const isExcel = fileSelected.name.endsWith('.xlsx') || fileSelected.name.endsWith('.xls');
+      let rows: any[][];
 
-      if (userErr) throw new Error(userErr.message);
+      if (isExcel) {
+        const b64 = await FileSystem.readAsStringAsync(fileSelected.uri, {
+          encoding: FileSystem.EncodingType.Base64,
+        });
+        const wb = read(b64, {type: 'base64'});
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        rows = utils.sheet_to_json(ws, {header: 1}) as any[][];
+      } else {
+        const text = await FileSystem.readAsStringAsync(fileSelected.uri, {
+          encoding: FileSystem.EncodingType.UTF8,
+        });
+        rows = parseCSVText(text);
+      }
 
-      // 2. Create faculty record
-      const {error: facErr} = await db.faculty().insert({
-        college_id: collegeId,
-        user_id: userRow.id,
-        name: facName.trim(),
-        mobile: `+91${facMobile}`,
-        email: facEmail.trim() || null,
-        qualification: facQualification.trim() || null,
-        is_active: true,
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      });
+      if (rows.length < 2) throw new Error('File has no data rows.');
 
-      if (facErr) throw new Error(facErr.message);
+      // Detect header
+      const headerRow = rows[0].map((h: any) => String(h ?? '').trim().toLowerCase());
+      const col = (name: string) => headerRow.findIndex(h => h.includes(name));
 
-      Toast.show({type: 'success', text1: '✅ Faculty Created', text2: `${facName} can now log in with +91${facMobile}`});
-      resetForm();
-      setShowModal(false);
-      loadData();
+      const typeIdx = col('type');
+      const nameIdx = col('name');
+      const mobileIdx = headerRow.findIndex(h =>
+        (h.includes('mobile') || h.includes('phone')) && !h.includes('parent')
+      );
+      const rollIdx = col('roll');
+      const parentIdx = headerRow.findIndex(h => h.includes('parent'));
+      const streamIdx = col('stream');
+      const yearIdx = col('year');
+      const emailIdx = col('email');
+      const qualIdx = col('qualif');
+
+      if (typeIdx === -1 || nameIdx === -1 || mobileIdx === -1) {
+        throw new Error(
+          'Required columns missing.\nNeeded: Type, Name, Mobile\nOptional: Roll_Number, Parent_Mobile, Stream, Year, Email, Qualification'
+        );
+      }
+
+      const users: ParsedUser[] = [];
+      const rowErrors: string[] = [];
+
+      for (let i = 1; i < rows.length; i++) {
+        const row = rows[i];
+        if (!row || row.every((c: any) => !c)) continue;
+
+        const rowNum = i + 1;
+        const get = (idx: number) => String(row[idx] ?? '').trim();
+
+        const type = get(typeIdx).toLowerCase();
+        const name = get(nameIdx);
+        const mobile = get(mobileIdx).replace(/\s/g, '');
+        const roll = rollIdx >= 0 ? get(rollIdx).toUpperCase() : '';
+        const parentMobile = parentIdx >= 0 ? get(parentIdx).replace(/\s/g, '') : '';
+        const stream = streamIdx >= 0 ? get(streamIdx).toUpperCase() : '';
+        const year = yearIdx >= 0 ? parseInt(get(yearIdx)) || 1 : 1;
+        const email = emailIdx >= 0 ? get(emailIdx) : '';
+        const qualification = qualIdx >= 0 ? get(qualIdx) : '';
+
+        if (!name) { rowErrors.push(`Row ${rowNum}: Name is empty`); continue; }
+        if (!/^\d{10}$/.test(mobile)) {
+          rowErrors.push(`Row ${rowNum}: Mobile "${mobile}" must be exactly 10 digits`);
+          continue;
+        }
+
+        if (type === 'student') {
+          if (!roll) { rowErrors.push(`Row ${rowNum}: Roll_Number is required for students`); continue; }
+          if (!VALID_STREAMS.includes(stream.replace('BIPC', 'BiPC'))) {
+            rowErrors.push(`Row ${rowNum}: Stream "${stream}" invalid. Must be: ${VALID_STREAMS.join(', ')}`);
+            continue;
+          }
+          if (year !== 1 && year !== 2) {
+            rowErrors.push(`Row ${rowNum}: Year must be 1 or 2`);
+            continue;
+          }
+          if (parentMobile && !/^\d{10}$/.test(parentMobile)) {
+            rowErrors.push(`Row ${rowNum}: Parent_Mobile "${parentMobile}" must be 10 digits`);
+            continue;
+          }
+          users.push({
+            type: 'student',
+            name,
+            mobile,
+            rollNumber: roll,
+            parentMobile: parentMobile || mobile,
+            stream: stream === 'BIPC' ? 'BiPC' : stream,
+            year,
+          });
+        } else if (type === 'faculty') {
+          users.push({type: 'faculty', name, mobile, email, qualification});
+        } else {
+          rowErrors.push(`Row ${rowNum}: Type "${type}" is invalid. Must be "student" or "faculty"`);
+        }
+      }
+
+      setParsedUsers(users);
+      setErrors(rowErrors);
+      setValidated(true);
+
+      if (users.length === 0 && rowErrors.length === 0) {
+        Alert.alert('Empty File', 'No valid rows found in the file.');
+      }
     } catch (err: any) {
-      Alert.alert('Error', err.message || 'Failed to create faculty');
+      Alert.alert('Validation Error', err.message || 'Failed to parse file.');
     } finally {
-      setSaving(false);
+      setValidating(false);
     }
   };
 
-  const renderStudentItem = ({item}: {item: any}) => (
-    <View style={styles.card}>
-      <View style={styles.cardLeft}>
-        <View style={[styles.avatar, {backgroundColor: Colors.primarySurface}]}>
-          <Text style={styles.avatarText}>{item.name?.[0]?.toUpperCase() || '?'}</Text>
-        </View>
-        <View style={styles.cardInfo}>
-          <Text style={styles.cardName}>{item.name}</Text>
-          <Text style={styles.cardSub}>{item.roll_number} · {item.stream} {item.year}st yr</Text>
-          <Text style={styles.cardMobile}>📱 {item.mobile}</Text>
-        </View>
-      </View>
-      <View style={[styles.statusBadge, item.status === 'active' ? styles.statusActive : styles.statusInactive]}>
-        <Text style={styles.statusText}>{item.status}</Text>
-      </View>
-    </View>
-  );
+  const handleImport = async () => {
+    if (parsedUsers.length === 0 || !user?.collegeId) return;
+    setImporting(true);
 
-  const renderFacultyItem = ({item}: {item: any}) => (
-    <View style={styles.card}>
-      <View style={styles.cardLeft}>
-        <View style={[styles.avatar, {backgroundColor: Colors.secondarySurface || Colors.surfaceVariant}]}>
-          <Text style={styles.avatarText}>{item.name?.[0]?.toUpperCase() || '?'}</Text>
-        </View>
-        <View style={styles.cardInfo}>
-          <Text style={styles.cardName}>{item.name}</Text>
-          <Text style={styles.cardSub}>{item.qualification || 'Faculty'}</Text>
-          <Text style={styles.cardMobile}>📱 {item.mobile}</Text>
-        </View>
-      </View>
-      <View style={[styles.statusBadge, item.is_active ? styles.statusActive : styles.statusInactive]}>
-        <Text style={styles.statusText}>{item.is_active ? 'active' : 'inactive'}</Text>
-      </View>
-    </View>
-  );
+    let successCount = 0;
+    const importErrors: string[] = [];
+
+    try {
+      for (const u of parsedUsers) {
+        try {
+          const mobileWithCode = `+91${u.mobile}`;
+
+          // Upsert user account
+          const existingUser = await db.users()
+            .select('id')
+            .eq('college_id', user.collegeId)
+            .eq('mobile', mobileWithCode)
+            .eq('role', u.type)
+            .maybeSingle();
+
+          let userId: string;
+
+          if (existingUser.data?.id) {
+            userId = existingUser.data.id;
+          } else {
+            const {data: newUser, error: uErr} = await db.users().insert({
+              college_id: user.collegeId,
+              role: u.type,
+              mobile: mobileWithCode,
+              is_active: true,
+              created_at: new Date().toISOString(),
+              updated_at: new Date().toISOString(),
+            }).select('id').single();
+
+            if (uErr) throw new Error(uErr.message);
+            userId = newUser!.id;
+          }
+
+          if (u.type === 'student') {
+            const existStd = await db.students()
+              .select('id')
+              .eq('college_id', user.collegeId)
+              .eq('roll_number', u.rollNumber)
+              .maybeSingle();
+
+            if (existStd.data?.id) {
+              await db.students().update({
+                user_id: userId,
+                name: u.name,
+                mobile: mobileWithCode,
+                parent_mobile: `+91${u.parentMobile}`,
+                stream: u.stream,
+                year: u.year,
+                status: 'active',
+                updated_at: new Date().toISOString(),
+              }).eq('id', existStd.data.id);
+            } else {
+              const {error: sErr} = await db.students().insert({
+                college_id: user.collegeId,
+                user_id: userId,
+                roll_number: u.rollNumber,
+                name: u.name,
+                mobile: mobileWithCode,
+                parent_mobile: `+91${u.parentMobile}`,
+                stream: u.stream,
+                year: u.year,
+                status: 'active',
+                created_at: new Date().toISOString(),
+                updated_at: new Date().toISOString(),
+              });
+              if (sErr) throw new Error(sErr.message);
+            }
+          } else {
+            // Faculty
+            const existFac = await db.faculty()
+              .select('id')
+              .eq('college_id', user.collegeId)
+              .eq('mobile', mobileWithCode)
+              .maybeSingle();
+
+            if (existFac.data?.id) {
+              await db.faculty().update({
+                user_id: userId,
+                name: u.name,
+                email: u.email || null,
+                qualification: u.qualification || null,
+                is_active: true,
+                updated_at: new Date().toISOString(),
+              }).eq('id', existFac.data.id);
+            } else {
+              const {error: fErr} = await db.faculty().insert({
+                college_id: user.collegeId,
+                user_id: userId,
+                name: u.name,
+                mobile: mobileWithCode,
+                email: u.email || null,
+                qualification: u.qualification || null,
+                is_active: true,
+                created_at: new Date().toISOString(),
+                updated_at: new Date().toISOString(),
+              });
+              if (fErr) throw new Error(fErr.message);
+            }
+          }
+
+          successCount++;
+        } catch (err: any) {
+          importErrors.push(`${u.name} (${u.mobile}): ${err.message}`);
+        }
+      }
+
+      if (successCount > 0) {
+        Toast.show({
+          type: 'success',
+          text1: `✅ Imported ${successCount} users`,
+          text2: importErrors.length > 0
+            ? `${importErrors.length} failed — see errors below`
+            : 'All users can now log in via OTP',
+        });
+      }
+
+      if (importErrors.length > 0) {
+        setErrors(importErrors);
+      } else {
+        // Reset and go back on full success
+        setTimeout(() => navigation.goBack(), 1500);
+      }
+
+    } catch (err: any) {
+      Alert.alert('Import Failed', err.message || 'Unexpected error during import.');
+    } finally {
+      setImporting(false);
+    }
+  };
 
   return (
     <SafeAreaView style={styles.container}>
       {/* Header */}
       <LinearGradient colors={['#1E3A8A', '#2563EB']} style={styles.header}>
-        <Text style={styles.headerTitle}>👥 User Management</Text>
-        <Text style={styles.headerSub}>Create login accounts for students & faculty</Text>
+        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
+          <Text style={styles.backText}>← Back</Text>
+        </TouchableOpacity>
+        <Text style={styles.headerTitle}>👥 Bulk User Upload</Text>
+        <Text style={styles.headerSub}>
+          Import students & faculty from a single CSV / Excel file
+        </Text>
       </LinearGradient>
 
-      {/* Tabs */}
-      <View style={styles.tabs}>
-        <TouchableOpacity
-          style={[styles.tab, activeTab === 'students' && styles.tabActive]}
-          onPress={() => setActiveTab('students')}>
-          <Text style={[styles.tabText, activeTab === 'students' && styles.tabTextActive]}>
-            🎓 Students ({students.length})
-          </Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.tab, activeTab === 'faculty' && styles.tabActive]}
-          onPress={() => setActiveTab('faculty')}>
-          <Text style={[styles.tabText, activeTab === 'faculty' && styles.tabTextActive]}>
-            👨‍🏫 Faculty ({faculty.length})
-          </Text>
-        </TouchableOpacity>
-      </View>
+      <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
 
-      {/* Info banner */}
-      <View style={styles.infoBanner}>
-        <Text style={styles.infoText}>
-          💡 Students and faculty log in using their <Text style={styles.infoBold}>registered mobile number + OTP</Text>. Exams are automatically scoped to your college.
-        </Text>
-      </View>
+        {/* Instructions */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>📋 CSV Format</Text>
+          <Text style={styles.instrText}>
+            Your file must have these columns in the first row:{'\n'}
+            <Text style={styles.mono}>
+              Type, Name, Mobile, Roll_Number, Parent_Mobile, Stream, Year, Email, Qualification
+            </Text>
+            {'\n\n'}
+            • <Text style={styles.bold}>Type</Text>: <Text style={styles.mono}>student</Text> or <Text style={styles.mono}>faculty</Text>{'\n'}
+            • <Text style={styles.bold}>Mobile</Text>: 10-digit number (login credential){'\n'}
+            • <Text style={styles.bold}>Roll_Number</Text>: required for students only{'\n'}
+            • <Text style={styles.bold}>Stream</Text>: MPC / BiPC / MEC / CEC / HEC{'\n'}
+            • <Text style={styles.bold}>Year</Text>: 1 or 2{'\n'}
+            • Email & Qualification are optional (faculty)
+          </Text>
 
-      {/* List */}
-      {loading ? (
-        <View style={styles.loadingBox}>
-          <ActivityIndicator size="large" color={Colors.primary} />
+          {/* Template preview */}
+          <View style={styles.templateBox}>
+            <Text style={styles.templateLabel}>📄 Example rows:</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+              <Text style={styles.templateText}>{CSV_TEMPLATE}</Text>
+            </ScrollView>
+          </View>
         </View>
-      ) : (
-        <FlatList
-          data={activeTab === 'students' ? students : faculty}
-          keyExtractor={item => item.id}
-          renderItem={activeTab === 'students' ? renderStudentItem : renderFacultyItem}
-          contentContainerStyle={styles.list}
-          ListEmptyComponent={
-            <View style={styles.emptyBox}>
-              <Text style={styles.emptyIcon}>{activeTab === 'students' ? '🎓' : '👨‍🏫'}</Text>
-              <Text style={styles.emptyText}>No {activeTab} yet. Tap the button below to create one.</Text>
-            </View>
-          }
-        />
-      )}
 
-      {/* FAB */}
-      <TouchableOpacity onPress={() => { resetForm(); setShowModal(true); }} style={styles.fab}>
-        <LinearGradient colors={['#1E3A8A', '#2563EB']} style={styles.fabGrad}>
-          <Text style={styles.fabText}>+ Add {activeTab === 'students' ? 'Student' : 'Faculty'}</Text>
-        </LinearGradient>
-      </TouchableOpacity>
+        {/* File picker */}
+        <TouchableOpacity
+          onPress={handleSelectFile}
+          style={[
+            styles.uploadZone,
+            fileSelected && !validated ? styles.uploadZonePending : null,
+            validated ? styles.uploadZoneDone : null,
+          ]}
+          activeOpacity={0.8}>
+          <Text style={styles.uploadIcon}>
+            {validated ? '✅' : fileSelected ? '📋' : '📂'}
+          </Text>
+          <Text style={styles.uploadTitle}>
+            {fileSelected ? fileSelected.name : 'Tap to select CSV or Excel file'}
+          </Text>
+          <Text style={styles.uploadSub}>
+            {validated
+              ? `${studentCount} students + ${facultyCount} faculty ready`
+              : 'Supports .csv, .xls, .xlsx'}
+          </Text>
+        </TouchableOpacity>
 
-      {/* Create Modal */}
-      <Modal
-        visible={showModal}
-        transparent
-        animationType="slide"
-        onRequestClose={() => setShowModal(false)}>
-        <View style={styles.modalOverlay}>
-          <KeyboardAvoidingView
-            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-            style={styles.modalWrapper}>
-            <View style={styles.modalCard}>
-              {/* Modal header */}
-              <View style={styles.modalHeader}>
-                <Text style={styles.modalTitle}>
-                  {activeTab === 'students' ? '🎓 Create Student Account' : '👨‍🏫 Create Faculty Account'}
-                </Text>
-                <TouchableOpacity onPress={() => setShowModal(false)}>
-                  <Text style={styles.modalClose}>✕</Text>
-                </TouchableOpacity>
+        {/* Validate button */}
+        {fileSelected && !validated && (
+          <TouchableOpacity
+            onPress={handleValidate}
+            disabled={validating}
+            style={styles.primaryBtn}>
+            <LinearGradient colors={['#1E3A8A', '#2563EB']} style={styles.btnGrad}>
+              {validating
+                ? <ActivityIndicator size="small" color="#fff" />
+                : <Text style={styles.btnText}>⚙ Validate File</Text>}
+            </LinearGradient>
+          </TouchableOpacity>
+        )}
+
+        {/* Validation report */}
+        {validated && (
+          <View style={styles.reportBox}>
+            <Text style={styles.reportTitle}>Validation Report</Text>
+
+            {parsedUsers.length > 0 && (
+              <View style={styles.summaryRow}>
+                <View style={[styles.chip, styles.chipStudent]}>
+                  <Text style={styles.chipText}>🎓 {studentCount} Students</Text>
+                </View>
+                <View style={[styles.chip, styles.chipFaculty]}>
+                  <Text style={styles.chipText}>👨‍🏫 {facultyCount} Faculty</Text>
+                </View>
               </View>
+            )}
 
-              <ScrollView showsVerticalScrollIndicator={false}>
-                {activeTab === 'students' ? (
-                  <>
-                    <Field label="Full Name *" value={stdName} onChange={setStdName} placeholder="e.g. Ravi Kumar" />
-                    <Field label="Roll Number *" value={stdRoll} onChange={t => setStdRoll(t.toUpperCase())} placeholder="e.g. ROLL001" autoCapitalize="characters" />
-                    <Field label="Mobile Number * (login credential)" value={stdMobile} onChange={setStdMobile} placeholder="10-digit mobile" keyboardType="phone-pad" maxLength={10} />
-                    <Field label="Parent Mobile *" value={stdParentMobile} onChange={setStdParentMobile} placeholder="10-digit parent mobile" keyboardType="phone-pad" maxLength={10} />
-
-                    <Text style={styles.fieldLabel}>Stream *</Text>
-                    <View style={styles.streamRow}>
-                      {STREAMS.map(s => (
-                        <TouchableOpacity
-                          key={s}
-                          onPress={() => setStdStream(s)}
-                          style={[styles.streamChip, stdStream === s && styles.streamChipActive]}>
-                          <Text style={[styles.streamChipText, stdStream === s && styles.streamChipTextActive]}>{s}</Text>
-                        </TouchableOpacity>
-                      ))}
-                    </View>
-
-                    <Text style={styles.fieldLabel}>Year *</Text>
-                    <View style={styles.yearRow}>
-                      {YEARS.map(y => (
-                        <TouchableOpacity
-                          key={y}
-                          onPress={() => setStdYear(y)}
-                          style={[styles.yearChip, stdYear === y && styles.yearChipActive]}>
-                          <Text style={[styles.yearChipText, stdYear === y && styles.yearChipTextActive]}>Year {y}</Text>
-                        </TouchableOpacity>
-                      ))}
-                    </View>
-
-                    <TouchableOpacity
-                      onPress={handleCreateStudent}
-                      disabled={saving}
-                      style={styles.submitBtn}>
-                      <LinearGradient colors={['#16A34A', '#22C55E']} style={styles.submitGrad}>
-                        {saving
-                          ? <ActivityIndicator size="small" color="#fff" />
-                          : <Text style={styles.submitText}>✅ Create Student Account</Text>}
-                      </LinearGradient>
-                    </TouchableOpacity>
-                  </>
-                ) : (
-                  <>
-                    <Field label="Full Name *" value={facName} onChange={setFacName} placeholder="e.g. Dr. Anitha Rao" />
-                    <Field label="Mobile Number * (login credential)" value={facMobile} onChange={setFacMobile} placeholder="10-digit mobile" keyboardType="phone-pad" maxLength={10} />
-                    <Field label="Email (optional)" value={facEmail} onChange={setFacEmail} placeholder="faculty@college.edu" keyboardType="email-address" />
-                    <Field label="Qualification (optional)" value={facQualification} onChange={setFacQualification} placeholder="e.g. M.Sc, B.Ed" />
-
-                    <TouchableOpacity
-                      onPress={handleCreateFaculty}
-                      disabled={saving}
-                      style={styles.submitBtn}>
-                      <LinearGradient colors={['#0284C7', '#0EA5E9']} style={styles.submitGrad}>
-                        {saving
-                          ? <ActivityIndicator size="small" color="#fff" />
-                          : <Text style={styles.submitText}>✅ Create Faculty Account</Text>}
-                      </LinearGradient>
-                    </TouchableOpacity>
-                  </>
-                )}
-
-                <View style={styles.noteBox}>
-                  <Text style={styles.noteText}>
-                    🔑 The registered mobile number becomes their login ID. They will receive a real OTP on that number when logging in.
+            {/* Preview first 5 */}
+            {parsedUsers.slice(0, 5).map((u, i) => (
+              <View key={i} style={styles.previewRow}>
+                <Text style={styles.previewBadge}>
+                  {u.type === 'student' ? '🎓' : '👨‍🏫'}
+                </Text>
+                <View style={styles.previewInfo}>
+                  <Text style={styles.previewName}>{u.name}</Text>
+                  <Text style={styles.previewMeta}>
+                    📱 {u.mobile}
+                    {u.type === 'student' ? ` · ${u.rollNumber} · ${u.stream} Y${u.year}` : ''}
                   </Text>
                 </View>
-              </ScrollView>
-            </View>
-          </KeyboardAvoidingView>
+              </View>
+            ))}
+            {parsedUsers.length > 5 && (
+              <Text style={styles.moreText}>+ {parsedUsers.length - 5} more users...</Text>
+            )}
+
+            {/* Errors */}
+            {errors.length > 0 && (
+              <View style={styles.errorBox}>
+                <Text style={styles.errorTitle}>⚠️ {errors.length} validation warnings:</Text>
+                {errors.slice(0, 8).map((e, i) => (
+                  <Text key={i} style={styles.errorItem}>• {e}</Text>
+                ))}
+                {errors.length > 8 && (
+                  <Text style={styles.errorItem}>...and {errors.length - 8} more</Text>
+                )}
+              </View>
+            )}
+
+            {/* Re-pick */}
+            <TouchableOpacity
+              onPress={() => {setFileSelected(null); setParsedUsers([]); setErrors([]); setValidated(false);}}
+              style={styles.rePick}>
+              <Text style={styles.rePickText}>↩ Choose Different File</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
+        {/* Import button */}
+        {validated && parsedUsers.length > 0 && (
+          <TouchableOpacity onPress={handleImport} disabled={importing} style={styles.primaryBtn}>
+            <LinearGradient colors={['#16A34A', '#22C55E']} style={styles.btnGrad}>
+              {importing
+                ? <ActivityIndicator size="small" color="#fff" />
+                : <Text style={styles.btnText}>
+                    ✅ Import {parsedUsers.length} Users ({studentCount} students + {facultyCount} faculty)
+                  </Text>}
+            </LinearGradient>
+          </TouchableOpacity>
+        )}
+
+        {/* Post-import errors */}
+        {importing === false && errors.length > 0 && validated && parsedUsers.length === 0 && (
+          <View style={styles.errorBox}>
+            <Text style={styles.errorTitle}>Import errors:</Text>
+            {errors.map((e, i) => <Text key={i} style={styles.errorItem}>• {e}</Text>)}
+          </View>
+        )}
+
+        <View style={styles.noticeBox}>
+          <Text style={styles.noticeText}>
+            🔑 Each user's <Text style={styles.bold}>mobile number becomes their login ID</Text>.
+            They receive a real OTP when logging in. Exams are automatically visible only to
+            students in this college.
+          </Text>
         </View>
-      </Modal>
+      </ScrollView>
     </SafeAreaView>
   );
 };
 
-// Reusable field component
-const Field: React.FC<{
-  label: string;
-  value: string;
-  onChange: (v: string) => void;
-  placeholder?: string;
-  keyboardType?: any;
-  maxLength?: number;
-  autoCapitalize?: any;
-}> = ({label, value, onChange, placeholder, keyboardType, maxLength, autoCapitalize}) => (
-  <View style={styles.fieldGroup}>
-    <Text style={styles.fieldLabel}>{label}</Text>
-    <TextInput
-      style={styles.fieldInput}
-      value={value}
-      onChangeText={onChange}
-      placeholder={placeholder}
-      placeholderTextColor={Colors.textMuted}
-      keyboardType={keyboardType || 'default'}
-      maxLength={maxLength}
-      autoCapitalize={autoCapitalize || 'words'}
-    />
-  </View>
-);
-
 const styles = StyleSheet.create({
   container: {flex: 1, backgroundColor: Colors.background},
   header: {padding: Spacing.xl, paddingBottom: Spacing.lg},
+  backBtn: {marginBottom: Spacing.sm},
+  backText: {fontFamily: FontFamily.semiBold, fontSize: FontSize.base, color: 'rgba(255,255,255,0.9)'},
   headerTitle: {fontFamily: FontFamily.bold, fontSize: FontSize['2xl'], color: Colors.white},
   headerSub: {fontFamily: FontFamily.medium, fontSize: FontSize.sm, color: 'rgba(255,255,255,0.8)', marginTop: 4},
-  tabs: {flexDirection: 'row', backgroundColor: Colors.surface, borderBottomWidth: 1, borderColor: Colors.border},
-  tab: {flex: 1, paddingVertical: Spacing.sm + 4, alignItems: 'center'},
-  tabActive: {borderBottomWidth: 3, borderBottomColor: Colors.primary},
-  tabText: {fontFamily: FontFamily.medium, fontSize: FontSize.sm, color: Colors.textMuted},
-  tabTextActive: {fontFamily: FontFamily.bold, color: Colors.primary},
-  infoBanner: {backgroundColor: Colors.primarySurface, borderLeftWidth: 4, borderLeftColor: Colors.primary, margin: Spacing.md, borderRadius: BorderRadius.md, padding: Spacing.sm},
-  infoText: {fontFamily: FontFamily.regular, fontSize: FontSize.xs, color: Colors.textSecondary, lineHeight: 18},
-  infoBold: {fontFamily: FontFamily.bold, color: Colors.primary},
-  list: {padding: Spacing.md, paddingBottom: 100},
-  card: {backgroundColor: Colors.surface, borderRadius: BorderRadius.xl, padding: Spacing.md, marginBottom: Spacing.sm, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', ...Shadow.sm},
-  cardLeft: {flexDirection: 'row', alignItems: 'center', flex: 1},
-  avatar: {width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center', marginRight: Spacing.sm},
-  avatarText: {fontFamily: FontFamily.bold, fontSize: FontSize.lg, color: Colors.primary},
-  cardInfo: {flex: 1},
-  cardName: {fontFamily: FontFamily.bold, fontSize: FontSize.base, color: Colors.textPrimary},
-  cardSub: {fontFamily: FontFamily.medium, fontSize: FontSize.xs, color: Colors.textSecondary, marginTop: 2},
-  cardMobile: {fontFamily: FontFamily.regular, fontSize: FontSize.xs, color: Colors.textMuted, marginTop: 2},
-  statusBadge: {paddingHorizontal: 8, paddingVertical: 3, borderRadius: BorderRadius.full},
-  statusActive: {backgroundColor: Colors.successSurface},
-  statusInactive: {backgroundColor: Colors.dangerSurface},
-  statusText: {fontFamily: FontFamily.bold, fontSize: FontSize.xs, color: Colors.textSecondary},
-  loadingBox: {flex: 1, alignItems: 'center', justifyContent: 'center'},
-  emptyBox: {alignItems: 'center', paddingTop: 60},
-  emptyIcon: {fontSize: 48, marginBottom: 12},
-  emptyText: {fontFamily: FontFamily.medium, fontSize: FontSize.base, color: Colors.textSecondary, textAlign: 'center', paddingHorizontal: 32},
-  fab: {position: 'absolute', bottom: 24, right: 20, borderRadius: BorderRadius.full, ...Shadow.lg, overflow: 'hidden'},
-  fabGrad: {paddingHorizontal: Spacing.xl, paddingVertical: 14},
-  fabText: {fontFamily: FontFamily.bold, fontSize: FontSize.base, color: Colors.white},
-  modalOverlay: {flex: 1, backgroundColor: Colors.overlay, justifyContent: 'flex-end'},
-  modalWrapper: {justifyContent: 'flex-end'},
-  modalCard: {backgroundColor: Colors.surface, borderTopLeftRadius: BorderRadius['2xl'], borderTopRightRadius: BorderRadius['2xl'], padding: Spacing.xl, maxHeight: '90%', ...Shadow.lg},
-  modalHeader: {flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: Spacing.lg},
-  modalTitle: {fontFamily: FontFamily.bold, fontSize: FontSize.lg, color: Colors.textPrimary, flex: 1},
-  modalClose: {fontSize: 22, color: Colors.textSecondary, padding: 4},
-  fieldGroup: {marginBottom: Spacing.md},
-  fieldLabel: {fontFamily: FontFamily.semiBold, fontSize: FontSize.sm, color: Colors.textPrimary, marginBottom: 6},
-  fieldInput: {height: 48, borderWidth: 1.5, borderColor: Colors.border, borderRadius: BorderRadius.lg, paddingHorizontal: Spacing.md, fontFamily: FontFamily.medium, fontSize: FontSize.base, color: Colors.textPrimary, backgroundColor: Colors.surfaceVariant},
-  streamRow: {flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: Spacing.md},
-  streamChip: {paddingHorizontal: 14, paddingVertical: 6, borderRadius: BorderRadius.full, borderWidth: 1.5, borderColor: Colors.border, backgroundColor: Colors.surface},
-  streamChipActive: {borderColor: Colors.primary, backgroundColor: Colors.primarySurface},
-  streamChipText: {fontFamily: FontFamily.medium, fontSize: FontSize.sm, color: Colors.textSecondary},
-  streamChipTextActive: {fontFamily: FontFamily.bold, color: Colors.primary},
-  yearRow: {flexDirection: 'row', gap: 10, marginBottom: Spacing.md},
-  yearChip: {flex: 1, paddingVertical: 10, borderRadius: BorderRadius.lg, borderWidth: 1.5, borderColor: Colors.border, alignItems: 'center', backgroundColor: Colors.surface},
-  yearChipActive: {borderColor: Colors.primary, backgroundColor: Colors.primarySurface},
-  yearChipText: {fontFamily: FontFamily.medium, fontSize: FontSize.sm, color: Colors.textSecondary},
-  yearChipTextActive: {fontFamily: FontFamily.bold, color: Colors.primary},
-  submitBtn: {borderRadius: BorderRadius.xl, overflow: 'hidden', marginTop: Spacing.base, marginBottom: Spacing.md},
-  submitGrad: {height: 52, alignItems: 'center', justifyContent: 'center'},
-  submitText: {fontFamily: FontFamily.bold, fontSize: FontSize.md, color: Colors.white},
-  noteBox: {backgroundColor: Colors.surfaceVariant, borderRadius: BorderRadius.md, padding: Spacing.sm, marginBottom: Spacing.xl},
-  noteText: {fontFamily: FontFamily.regular, fontSize: FontSize.xs, color: Colors.textSecondary, lineHeight: 18},
+  scroll: {padding: Spacing.base, paddingBottom: 60},
+  section: {marginBottom: Spacing.base},
+  sectionTitle: {fontFamily: FontFamily.bold, fontSize: FontSize.md, color: Colors.textPrimary, marginBottom: Spacing.sm},
+  instrText: {fontFamily: FontFamily.medium, fontSize: FontSize.sm, color: Colors.textSecondary, lineHeight: 22},
+  mono: {fontFamily: 'monospace', fontSize: FontSize.xs, backgroundColor: Colors.surfaceVariant},
+  bold: {fontFamily: FontFamily.bold, color: Colors.textPrimary},
+  templateBox: {backgroundColor: Colors.surfaceVariant, borderRadius: BorderRadius.lg, padding: Spacing.sm, marginTop: Spacing.sm},
+  templateLabel: {fontFamily: FontFamily.semiBold, fontSize: FontSize.xs, color: Colors.textSecondary, marginBottom: 4},
+  templateText: {fontFamily: 'monospace', fontSize: FontSize.xs, color: Colors.textPrimary, lineHeight: 18},
+  uploadZone: {
+    backgroundColor: Colors.surface,
+    minHeight: 130,
+    borderRadius: BorderRadius.xl,
+    borderStyle: 'dashed',
+    borderWidth: 2,
+    borderColor: Colors.borderDark,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: Spacing.base,
+    marginBottom: Spacing.md,
+    ...Shadow.sm,
+  },
+  uploadZonePending: {borderColor: Colors.primary, backgroundColor: Colors.primarySurface},
+  uploadZoneDone: {borderColor: Colors.success, backgroundColor: Colors.successSurface},
+  uploadIcon: {fontSize: 40, marginBottom: 8},
+  uploadTitle: {fontFamily: FontFamily.semiBold, fontSize: FontSize.base, color: Colors.textPrimary, textAlign: 'center'},
+  uploadSub: {fontFamily: FontFamily.regular, fontSize: FontSize.xs, color: Colors.textMuted, marginTop: 4},
+  primaryBtn: {borderRadius: BorderRadius.xl, overflow: 'hidden', marginBottom: Spacing.md},
+  btnGrad: {height: 52, alignItems: 'center', justifyContent: 'center', paddingHorizontal: Spacing.base},
+  btnText: {fontFamily: FontFamily.bold, fontSize: FontSize.base, color: Colors.white, textAlign: 'center'},
+  reportBox: {backgroundColor: Colors.surface, borderRadius: BorderRadius.xl, padding: Spacing.base, marginBottom: Spacing.md, ...Shadow.sm},
+  reportTitle: {fontFamily: FontFamily.bold, fontSize: FontSize.lg, color: Colors.textPrimary, marginBottom: Spacing.sm},
+  summaryRow: {flexDirection: 'row', gap: 10, marginBottom: Spacing.sm},
+  chip: {paddingHorizontal: 14, paddingVertical: 6, borderRadius: BorderRadius.full},
+  chipStudent: {backgroundColor: Colors.primarySurface},
+  chipFaculty: {backgroundColor: Colors.successSurface},
+  chipText: {fontFamily: FontFamily.bold, fontSize: FontSize.sm, color: Colors.textPrimary},
+  previewRow: {flexDirection: 'row', alignItems: 'center', paddingVertical: 6, borderBottomWidth: 1, borderBottomColor: Colors.borderLight},
+  previewBadge: {fontSize: 20, marginRight: 10},
+  previewInfo: {flex: 1},
+  previewName: {fontFamily: FontFamily.semiBold, fontSize: FontSize.sm, color: Colors.textPrimary},
+  previewMeta: {fontFamily: FontFamily.regular, fontSize: FontSize.xs, color: Colors.textMuted, marginTop: 2},
+  moreText: {fontFamily: FontFamily.medium, fontSize: FontSize.xs, color: Colors.textMuted, textAlign: 'center', marginTop: Spacing.sm},
+  errorBox: {backgroundColor: Colors.dangerSurface, borderRadius: BorderRadius.lg, padding: Spacing.sm, marginTop: Spacing.sm, borderWidth: 1, borderColor: Colors.dangerBorder},
+  errorTitle: {fontFamily: FontFamily.bold, fontSize: FontSize.sm, color: Colors.dangerDark, marginBottom: 4},
+  errorItem: {fontFamily: FontFamily.medium, fontSize: FontSize.xs, color: Colors.textSecondary, marginBottom: 3},
+  rePick: {marginTop: Spacing.sm, alignItems: 'center'},
+  rePickText: {fontFamily: FontFamily.semiBold, fontSize: FontSize.xs, color: Colors.primary, textDecorationLine: 'underline'},
+  noticeBox: {backgroundColor: Colors.primarySurface, borderLeftWidth: 4, borderLeftColor: Colors.primary, borderRadius: BorderRadius.md, padding: Spacing.sm, marginTop: Spacing.sm},
+  noticeText: {fontFamily: FontFamily.regular, fontSize: FontSize.xs, color: Colors.textSecondary, lineHeight: 18},
 });
 
 export default UserManagement;

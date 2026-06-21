@@ -228,16 +228,10 @@ const AdminDashboard: React.FC = () => {
           style={styles.sectionCard}>
           <View style={styles.quickActionsGrid}>
             <QuickActionButton
-              emoji="➕"
-              label={t('dashboard.addStudent')}
+              emoji="👥"
+              label="Bulk Upload"
               gradient={['#1D4ED8', '#2563EB']}
-              onPress={() => navigation.navigate('AddStudent', {})}
-            />
-            <QuickActionButton
-              emoji="👨‍🏫"
-              label={t('dashboard.addFaculty')}
-              gradient={['#0284C7', '#0EA5E9']}
-              onPress={() => navigation.navigate('AddFaculty', {})}
+              onPress={() => navigation.navigate('UserManagement')}
             />
             <QuickActionButton
               emoji="📝"
@@ -246,10 +240,16 @@ const AdminDashboard: React.FC = () => {
               onPress={() => navigation.navigate('CreateExam')}
             />
             <QuickActionButton
+              emoji="📅"
+              label="Calendar"
+              gradient={['#0284C7', '#0EA5E9']}
+              onPress={() => (navigation as any).navigate('Calendar')}
+            />
+            <QuickActionButton
               emoji="📊"
               label={t('dashboard.viewReports')}
               gradient={['#6D28D9', '#8B5CF6']}
-              onPress={() => {}}
+              onPress={() => (navigation as any).navigate('Reports')}
             />
           </View>
         </AnalyticsCard>

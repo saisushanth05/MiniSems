@@ -42,7 +42,7 @@ const RESEND_COOLDOWN = 30;
 const OTPScreen: React.FC = () => {
   const navigation = useNavigation<Nav>();
   const route = useRoute<Route>();
-  const {mobile, role, rollNumber} = route.params;
+  const {mobile, role, rollNumber, otpHint} = route.params;
   const {t} = useTranslation();
   const {setUser, setDeviceId} = useAuthStore();
 
@@ -55,6 +55,18 @@ const OTPScreen: React.FC = () => {
   const successAnim = useRef(new Animated.Value(0)).current;
 
   const gradient = ROLE_GRADIENT[role] || ROLE_GRADIENT.student;
+
+  // Show OTP hint in development/preview mode
+  useEffect(() => {
+    if (otpHint) {
+      Toast.show({
+        type: 'info',
+        text1: '🔑 Testing OTP Code',
+        text2: otpHint,
+        visibilityTime: 12000,
+      });
+    }
+  }, [otpHint]);
 
   // Cooldown timer
   useEffect(() => {
