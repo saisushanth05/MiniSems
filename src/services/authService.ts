@@ -18,21 +18,38 @@ interface CachedOTP {
   attempts: number;
 }
 
+const memoryOTPCache = new Map<string, CachedOTP>();
+
 const otpCache = {
   set: (mobile: string, data: CachedOTP) => {
-    otpStorage.set(mobile, JSON.stringify(data));
+    memoryOTPCache.set(mobile, data);
+    try {
+      otpStorage.set(mobile, JSON.stringify(data));
+    } catch (e) {
+      console.warn('[AUTH] MMKV set failed:', e);
+    }
   },
   get: (mobile: string): CachedOTP | null => {
+    if (memoryOTPCache.has(mobile)) {
+      return memoryOTPCache.get(mobile)!;
+    }
     try {
       const raw = otpStorage.getString(mobile);
       if (!raw) return null;
-      return JSON.parse(raw) as CachedOTP;
+      const data = JSON.parse(raw) as CachedOTP;
+      memoryOTPCache.set(mobile, data);
+      return data;
     } catch {
       return null;
     }
   },
   delete: (mobile: string) => {
-    otpStorage.delete(mobile);
+    memoryOTPCache.delete(mobile);
+    try {
+      otpStorage.delete(mobile);
+    } catch (e) {
+      console.warn('[AUTH] MMKV delete failed:', e);
+    }
   },
 };
 
@@ -164,12 +181,17 @@ export const verifyOTPAndLogin = async (
       ? request.mobile.slice(3)
       : request.mobile;
 
+    console.log(`[AUTH] verifyOTPAndLogin: Checking OTP for mobile: ${mobile}, entered OTP: "${request.otp}" (type: ${typeof request.otp})`);
+
     let isVerified = false;
 
     // ── 1. Verify against MMKV-persisted cache (primary – always reliable) ──
     const cached = otpCache.get(mobile);
+    console.log(`[AUTH] verifyOTPAndLogin: Cached OTP record:`, cached);
+
     if (cached) {
       if (cached.expiresAt < Date.now()) {
+        console.log(`[AUTH] verifyOTPAndLogin: OTP has expired (Expires: ${cached.expiresAt}, Now: ${Date.now()})`);
         otpCache.delete(mobile);
         return {data: null, error: {message: 'OTP has expired. Please request a new OTP.'}};
       }
@@ -177,14 +199,17 @@ export const verifyOTPAndLogin = async (
       cached.attempts += 1;
 
       if (cached.attempts > 5) {
+        console.log(`[AUTH] verifyOTPAndLogin: Too many incorrect attempts (${cached.attempts})`);
         otpCache.delete(mobile);
         return {data: null, error: {message: 'Too many incorrect attempts. Please request a new OTP.'}};
       }
 
       if (cached.otp === request.otp) {
+        console.log(`[AUTH] verifyOTPAndLogin: OTP matched successfully!`);
         isVerified = true;
         otpCache.delete(mobile); // consume OTP — one-time use
       } else {
+        console.log(`[AUTH] verifyOTPAndLogin: OTP mismatch. Expected: "${cached.otp}", Got: "${request.otp}"`);
         // Update attempt count in cache
         otpCache.set(mobile, cached);
       }
@@ -192,6 +217,7 @@ export const verifyOTPAndLogin = async (
 
     // ── 2. Fall back to DB lookup if not found in MMKV cache ──
     if (!isVerified) {
+      console.log(`[AUTH] verifyOTPAndLogin: Not verified via cache. Falling back to DB lookup for ${mobile}...`);
       try {
         const {data: otpLog, error: lookupError} = await db.otpLogs()
           .select('*')
@@ -206,9 +232,12 @@ export const verifyOTPAndLogin = async (
           console.warn('[AUTH] DB OTP lookup error:', lookupError.message);
         }
 
+        console.log(`[AUTH] verifyOTPAndLogin: DB OTP log response:`, otpLog);
+
         if (otpLog) {
           // Check max attempts
           if ((otpLog.attempts || 0) >= 5) {
+            console.log(`[AUTH] verifyOTPAndLogin: Too many DB attempts (${otpLog.attempts})`);
             return {data: null, error: {message: 'Too many incorrect attempts. Please request a new OTP.'}};
           }
 
@@ -220,6 +249,7 @@ export const verifyOTPAndLogin = async (
           } catch (_) {/* swallow RLS error */}
 
           if (otpLog.otp_hash === request.otp) {
+            console.log(`[AUTH] verifyOTPAndLogin: OTP matched successfully via DB!`);
             isVerified = true;
             // Mark as verified
             try {
@@ -227,7 +257,11 @@ export const verifyOTPAndLogin = async (
                 .update({is_verified: true, verified_at: new Date().toISOString()})
                 .eq('id', otpLog.id);
             } catch (_) {/* swallow RLS error */}
+          } else {
+            console.log(`[AUTH] verifyOTPAndLogin: DB OTP mismatch. Expected: "${otpLog.otp_hash}", Got: "${request.otp}"`);
           }
+        } else {
+          console.log(`[AUTH] verifyOTPAndLogin: No active OTP found in DB for ${mobile}`);
         }
       } catch (dbErr: any) {
         console.warn('[AUTH] DB OTP fallback failed:', dbErr?.message || dbErr);
@@ -235,6 +269,7 @@ export const verifyOTPAndLogin = async (
     }
 
     if (!isVerified) {
+      console.log(`[AUTH] verifyOTPAndLogin: OTP verification failed. Returning error.`);
       return {data: null, error: {message: 'Incorrect OTP. Please check and try again.'}};
     }
 

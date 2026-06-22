@@ -62,6 +62,7 @@ const OTPScreen: React.FC = () => {
 
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const successAnim = useRef(new Animated.Value(0)).current;
+  const verifyingRef = useRef(false);
 
   const gradient = ROLE_GRADIENT[role] || ROLE_GRADIENT.student;
 
@@ -115,12 +116,15 @@ const OTPScreen: React.FC = () => {
   }, []);
 
   const handleVerify = useCallback(async (otpValue: string) => {
-    if (otpValue.length < 6) return;
+    if (otpValue.length < 6 || verifyingRef.current) return;
+    verifyingRef.current = true;
     setLoading(true);
     setHasError(false);
+    setErrorMessage(null);
 
     try {
       const device = await getDeviceInfo();
+      console.log(`[OTPScreen] Attempting verify for ${mobile}, OTP: ${otpValue}`);
       const response = await verifyOTPAndLogin({
         mobile,
         otp: otpValue,
@@ -133,12 +137,14 @@ const OTPScreen: React.FC = () => {
       });
 
       if (response.error) {
+        console.log(`[OTPScreen] Verification failed: ${response.error.message}`);
         setHasError(true);
         setErrorMessage(response.error.message);
         Toast.show({type: 'error', text1: t('auth.invalidOTP'), text2: response.error.message});
         return;
       }
 
+      console.log('[OTPScreen] Verification successful');
       if (response.data) {
         // Success animation
         Animated.spring(successAnim, {
@@ -167,13 +173,15 @@ const OTPScreen: React.FC = () => {
           });
         }, 600);
       }
-    } catch {
+    } catch (e: any) {
+      console.error('[OTPScreen] Verification error:', e);
       setHasError(true);
       Toast.show({type: 'error', text1: 'Error', text2: t('common.networkError')});
     } finally {
       setLoading(false);
+      verifyingRef.current = false;
     }
-  }, [mobile, role, rollNumber]);
+  }, [mobile, role, rollNumber, navigation, setDeviceId, setUser, t, successAnim]);
 
   const handleResend = useCallback(async () => {
     if (resendCooldown > 0 || resending) return;
