@@ -1,17 +1,25 @@
 # EAS Build — files to exclude from the uploaded tarball
 # Keeps the tarball small so uploads don't time out (ECONNRESET)
 
+# Node dependency directory (EAS will install it fresh on the server)
+node_modules/
+
+# Version control & lock directories
+.git/
+.bundle/
+
+# Expo local cache
+.expo/
+
+# Scratch and CSV templates
+scratch/
+*.csv
+
 # Android local build outputs
 android/app/build/
 android/build/
 android/.gradle/
 android/app/.cxx/
-
-# node_modules Android build artifacts (very large, not needed by EAS)
-node_modules/**/android/build/
-node_modules/**/android/.gradle/
-node_modules/**/android/.cxx/
-node_modules/**/.gradle/
 
 # iOS build artifacts
 ios/build/
@@ -33,6 +41,3 @@ Thumbs.db
 # Test & coverage
 coverage/
 __tests__/__snapshots__/
-
-# Sample / scratch files
-sample_questions.csv
